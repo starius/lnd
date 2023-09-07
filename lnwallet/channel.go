@@ -7324,6 +7324,29 @@ func (lc *LightningChannel) ForceClose() (*LocalForceCloseSummary, error) {
 	lc.Lock()
 	defer lc.Unlock()
 
+	summary, err := lc.getLocalForceCloseSummary()
+	if err != nil {
+		return nil, err
+	}
+
+	// Set the channel state to indicate that the channel is now in a
+	// contested state.
+	lc.status = channelDispute
+
+	return summary, nil
+}
+
+// GetLocalForceCloseSummary returns all the information needed for execution
+// of local force close should the caller decide to do it. This method doesn't
+// change the state of the channel and is completely read-only.
+func (lc *LightningChannel) GetLocalForceCloseSummary() (*LocalForceCloseSummary, error) {
+	lc.Lock()
+	defer lc.Unlock()
+
+	return lc.getLocalForceCloseSummary()
+}
+
+func (lc *LightningChannel) getLocalForceCloseSummary() (*LocalForceCloseSummary, error) {
 	// If we've detected local data loss for this channel, then we won't
 	// allow a force close, as it may be the case that we have a dated
 	// version of the commitment, or this is actually a channel shell.
@@ -7347,10 +7370,6 @@ func (lc *LightningChannel) ForceClose() (*LocalForceCloseSummary, error) {
 		return nil, fmt.Errorf("unable to gen force close "+
 			"summary: %w", err)
 	}
-
-	// Set the channel state to indicate that the channel is now in a
-	// contested state.
-	lc.status = channelDispute
 
 	return summary, nil
 }
