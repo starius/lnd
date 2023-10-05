@@ -311,6 +311,14 @@
             }
           }
         },
+        "parameters": [
+          {
+            "name": "include_local_force_close_summary",
+            "in": "query",
+            "required": false,
+            "type": "boolean"
+          }
+        ],
         "tags": [
           "Lightning"
         ]
@@ -455,6 +463,12 @@
             "required": false,
             "type": "string",
             "format": "byte"
+          },
+          {
+            "name": "include_local_force_close_summary",
+            "in": "query",
+            "required": false,
+            "type": "boolean"
           }
         ],
         "tags": [
@@ -3801,6 +3815,10 @@
           "type": "string",
           "format": "byte",
           "description": "Is an encrypted single-chan backup. this can be passed to\nRestoreChannelBackups, or the WalletUnlocker Init and Unlock methods in\norder to trigger the recovery protocol. When using REST, this field must be\nencoded as base64."
+        },
+        "local_force_close_summary": {
+          "type": "string",
+          "format": "byte"
         }
       }
     },
