@@ -4319,6 +4319,8 @@ message ForwardingHistoryResponse {
 message ExportChannelBackupRequest {
     // The target channel point to obtain a back up for.
     ChannelPoint chan_point = 1;
+
+    bool include_db_channels = 2;
 }
 
 message ChannelBackup {
@@ -4334,6 +4336,8 @@ message ChannelBackup {
     encoded as base64.
     */
     bytes chan_backup = 2;
+
+    bytes db_channels = 3;
 }
 
 message MultiChanBackup {
@@ -4352,7 +4356,9 @@ message MultiChanBackup {
 }
 
 message ChanBackupExportRequest {
+    bool include_db_channels = 1;
 }
+
 message ChanBackupSnapshot {
     /*
     The set of new channels that have been added since the last channel backup
@@ -4365,6 +4371,8 @@ message ChanBackupSnapshot {
     lnd.
     */
     MultiChanBackup multi_chan_backup = 2;
+
+    bytes db_channels = 3;
 }
 
 message ChannelBackups {

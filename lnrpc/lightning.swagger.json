@@ -311,6 +311,14 @@
             }
           }
         },
+        "parameters": [
+          {
+            "name": "include_db_channels",
+            "in": "query",
+            "required": false,
+            "type": "boolean"
+          }
+        ],
         "tags": [
           "Lightning"
         ]
@@ -455,6 +463,12 @@
             "required": false,
             "type": "string",
             "format": "byte"
+          },
+          {
+            "name": "include_db_channels",
+            "in": "query",
+            "required": false,
+            "type": "boolean"
           }
         ],
         "tags": [
@@ -3436,6 +3450,10 @@
         "multi_chan_backup": {
           "$ref": "#/definitions/lnrpcMultiChanBackup",
           "description": "A multi-channel backup that covers all open channels currently known to\nlnd."
+        },
+        "db_channels": {
+          "type": "string",
+          "format": "byte"
         }
       }
     },
@@ -3801,6 +3819,10 @@
           "type": "string",
           "format": "byte",
           "description": "Is an encrypted single-chan backup. this can be passed to\nRestoreChannelBackups, or the WalletUnlocker Init and Unlock methods in\norder to trigger the recovery protocol. When using REST, this field must be\nencoded as base64."
+        },
+        "db_channels": {
+          "type": "string",
+          "format": "byte"
         }
       }
     },
