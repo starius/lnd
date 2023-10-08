@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -51,6 +52,7 @@ import (
 	"github.com/lightningnetwork/lnd/kvdb"
 	"github.com/lightningnetwork/lnd/labels"
 	"github.com/lightningnetwork/lnd/lncfg"
+	"github.com/lightningnetwork/lnd/lnencrypt"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/invoicesrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
@@ -7216,9 +7218,47 @@ func (r *rpcServer) ExportChannelBackup(ctx context.Context,
 			len(packedBackup))
 	}
 
+	// Close summary.
+	var closeSummaryEncrypted []byte
+	if in.IncludeLocalForceCloseSummary {
+		channel, err := r.server.chanStateDB.FetchChannel(nil, chanPoint)
+		if err != nil {
+			return nil, fmt.Errorf("chanStateDB.FetchChannel failed for "+
+				"ChannelPoint(%v): %w", chanPoint, err)
+		}
+		chanMachine, err := lnwallet.NewLightningChannel(
+			r.server.cc.Signer, channel, nil,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("lnwallet.NewLightningChannel failed for "+
+				"ChannelPoint(%v): %w", chanPoint, err)
+		}
+		closeSummary, err := chanMachine.GetLocalForceCloseSummary()
+		if err != nil {
+			return nil, fmt.Errorf("GetLocalForceCloseSummary failed for "+
+				"ChannelPoint(%v): %w", chanPoint, err)
+		}
+		closeSummaryJson, err := json.Marshal(closeSummary)
+		if err != nil {
+			return nil, fmt.Errorf("close summary JSON encoding failed for "+
+				"ChannelPoint(%v): %w", chanPoint, err)
+		}
+		e, err := lnencrypt.KeyRingEncrypter(r.server.cc.KeyRing)
+		if err != nil {
+			return nil, fmt.Errorf("lnencrypt.KeyRingEncrypter failed: %w", err)
+		}
+		var buf bytes.Buffer
+		if err := e.EncryptPayloadToWriter(closeSummaryJson, &buf); err != nil {
+			return nil, fmt.Errorf("encryption failed for "+
+				"ChannelPoint(%v): %w", chanPoint, err)
+		}
+		closeSummaryEncrypted = buf.Bytes()
+	}
+
 	return &lnrpc.ChannelBackup{
-		ChanPoint:  in.ChanPoint,
-		ChanBackup: packedBackup,
+		ChanPoint:              in.ChanPoint,
+		ChanBackup:             packedBackup,
+		LocalForceCloseSummary: closeSummaryEncrypted,
 	}, nil
 }
 

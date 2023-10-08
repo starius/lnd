@@ -2297,7 +2297,7 @@ var exportChanBackupCommand = cli.Command{
 	Category: "Channels",
 	Usage: "Obtain a static channel back up for a selected channels, " +
 		"or all known channels.",
-	ArgsUsage: "[chan_point] [--all] [--output_file]",
+	ArgsUsage: "[chan_point] [--all] [--output_file] [--close_summary]",
 	Description: `
 	This command allows a user to export a Static Channel Backup (SCB) for
 	a selected channel. SCB's are encrypted backups of a channel's initial
@@ -2340,6 +2340,11 @@ var exportChanBackupCommand = cli.Command{
 			the backup (either Single or Multi) will be written to
 			the target file, this is the same format used by lnd in
 			its channel.backup file `,
+		},
+		cli.BoolFlag{
+			Name: "close_summary",
+			Usage: "if specified, then a local force close summary " +
+				"is returned as well",
 		},
 	},
 	Action: actionDecorator(exportChanBackup),
@@ -2386,7 +2391,8 @@ func exportChanBackup(ctx *cli.Context) error {
 
 		chanBackup, err := client.ExportChannelBackup(
 			ctxc, &lnrpc.ExportChannelBackupRequest{
-				ChanPoint: chanPointRPC,
+				ChanPoint:                     chanPointRPC,
+				IncludeLocalForceCloseSummary: ctx.IsSet("close_summary"),
 			},
 		)
 		if err != nil {
@@ -2414,17 +2420,23 @@ func exportChanBackup(ctx *cli.Context) error {
 		}
 
 		printJSON(struct {
-			ChanPoint  string `json:"chan_point"`
-			ChanBackup []byte `json:"chan_backup"`
+			ChanPoint    string `json:"chan_point"`
+			ChanBackup   []byte `json:"chan_backup"`
+			CloseSummary []byte `json:"close_summary,omitempty"`
 		}{
-			ChanPoint:  chanPoint.String(),
-			ChanBackup: chanBackup.ChanBackup,
+			ChanPoint:    chanPoint.String(),
+			ChanBackup:   chanBackup.ChanBackup,
+			CloseSummary: chanBackup.LocalForceCloseSummary,
 		})
 		return nil
 	}
 
 	if !ctx.IsSet("all") {
 		return fmt.Errorf("if a channel isn't specified, -all must be")
+	}
+
+	if ctx.IsSet("close_summary") {
+		return fmt.Errorf("--close_summary with --all are not implemented yet")
 	}
 
 	chanBackup, err := client.ExportAllChannelBackups(
