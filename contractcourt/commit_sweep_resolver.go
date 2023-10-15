@@ -25,9 +25,7 @@ const (
 )
 
 // commitSweepResolver is a resolver that will attempt to sweep the commitment
-// output paying to us, in the case that the remote party broadcasts their
-// version of the commitment transaction. We can sweep this output immediately,
-// as it doesn't have a time-lock delay.
+// output paying to us.
 type commitSweepResolver struct {
 	// commitResolution contains all data required to successfully sweep
 	// this HTLC on-chain.
