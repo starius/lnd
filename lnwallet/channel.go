@@ -6348,6 +6348,128 @@ type CommitOutputResolution struct {
 	// that pay to the local party within the broadcast commitment
 	// transaction.
 	MaturityDelay uint32
+
+	// LeaseExpiry denotes the additional waiting period the contract must
+	// hold until it can be resolved. This waiting period is known as the
+	// expiration of a script-enforced leased channel and only applies to
+	// the channel initiator.
+	//
+	// NOTE: This value should only be set when the contract belongs to a
+	// leased channel.
+	LeaseExpiry uint32
+
+	// IsInitiator denotes whether the party responsible for resolving
+	// the contract initiated the channel.
+	IsInitiator bool
+
+	// chanType denotes the type of channel the contract belongs to.
+	ChanType channeldb.ChannelType
+}
+
+// MakeCommitSweepInput creates transaction input to sweep the commitment
+// output paying to us.
+//
+// broadcastHeight is the height that the original contract was
+// broadcast to the main-chain at. We'll use this value to bound any
+// historical queries to the chain for spends/confirmations.
+func (r *CommitOutputResolution) MakeCommitSweepInput(broadcastHeight uint32) (inp *input.BaseInput, err error) {
+	witnessType, _, _ := r.CommitProperties()
+
+	// We'll craft an input with all the information required for the
+	// sweeper to create a fully valid sweeping transaction to recover
+	// these coins.
+	if r.HasCLTV() {
+		inp = input.NewCsvInputWithCltv(
+			&r.SelfOutPoint, witnessType,
+			&r.SelfOutputSignDesc,
+			broadcastHeight, r.MaturityDelay,
+			r.LeaseExpiry,
+		)
+	} else {
+		inp = input.NewCsvInput(
+			&r.SelfOutPoint, witnessType,
+			&r.SelfOutputSignDesc,
+			broadcastHeight, r.MaturityDelay,
+		)
+	}
+
+	return inp, nil
+}
+
+// HasCLTV denotes whether the resolver must wait for an additional CLTV to
+// expire before resolving the contract.
+func (r *CommitOutputResolution) HasCLTV() bool {
+	return r.IsInitiator && r.LeaseExpiry > 0
+}
+
+// CommitProperties returns properties of the commit used to sweep funds.
+func (r *CommitOutputResolution) CommitProperties() (witnessType input.WitnessType, isLocalCommitTx, isDelayedOutput bool) {
+	signDesc := r.SelfOutputSignDesc
+	switch {
+	// For taproot channels, we'll know if this is the local commit based
+	// on the witness script. For local channels, the witness script has an
+	// OP_DROP value.
+	//
+	// TODO(roasbeef): revisit this after the script changes
+	//  * otherwise need to base off the key in script or the CSV value
+	//  (script num encode)
+	case r.ChanType.IsTaproot():
+		scriptLen := len(signDesc.WitnessScript)
+		isLocalCommitTx = signDesc.WitnessScript[scriptLen-1] ==
+			txscript.OP_DROP
+
+	// The output is on our local commitment if the script starts with
+	// OP_IF for the revocation clause. On the remote commitment it will
+	// either be a regular P2WKH or a simple sig spend with a CSV delay.
+	default:
+		isLocalCommitTx = signDesc.WitnessScript[0] == txscript.OP_IF
+	}
+	isDelayedOutput = r.MaturityDelay != 0
+
+	// There're three types of commitments, those that have tweaks for the
+	// remote key (us in this case), those that don't, and a third where
+	// there is no tweak and the output is delayed. On the local commitment
+	// our output will always be delayed. We'll rely on the presence of the
+	// commitment tweak to discern which type of commitment this is.
+	switch {
+	// The local delayed output for a taproot channel.
+	case isLocalCommitTx && r.ChanType.IsTaproot():
+		witnessType = input.TaprootLocalCommitSpend
+
+	// The CSV 1 delayed output for a taproot channel.
+	case !isLocalCommitTx && r.ChanType.IsTaproot():
+		witnessType = input.TaprootRemoteCommitSpend
+
+	// Delayed output to us on our local commitment for a channel lease in
+	// which we are the initiator.
+	case isLocalCommitTx && r.HasCLTV():
+		witnessType = input.LeaseCommitmentTimeLock
+
+	// Delayed output to us on our local commitment.
+	case isLocalCommitTx:
+		witnessType = input.CommitmentTimeLock
+
+	// A confirmed output to us on the remote commitment for a channel lease
+	// in which we are the initiator.
+	case isDelayedOutput && r.HasCLTV():
+		witnessType = input.LeaseCommitmentToRemoteConfirmed
+
+	// A confirmed output to us on the remote commitment.
+	case isDelayedOutput:
+		witnessType = input.CommitmentToRemoteConfirmed
+
+	// A non-delayed output on the remote commitment where the key is
+	// tweakless.
+	case r.SelfOutputSignDesc.SingleTweak == nil:
+		witnessType = input.CommitSpendNoDelayTweakless
+
+	// A non-delayed output on the remote commitment where the key is
+	// tweaked.
+	default:
+		witnessType = input.CommitmentNoDelay
+	}
+
+	return witnessType, isLocalCommitTx, isDelayedOutput
 }
 
 // UnilateralCloseSummary describes the details of a detected unilateral
@@ -6492,6 +6614,9 @@ func NewUnilateralCloseSummary(chanState *channeldb.OpenChannel, signer input.Si
 				HashType: sweepSigHash(chanState.ChanType),
 			},
 			MaturityDelay: maturityDelay,
+			LeaseExpiry:   leaseExpiry,
+			IsInitiator:   chanState.IsInitiator,
+			ChanType:      chanState.ChanType,
 		}
 
 		// For taproot channels, we'll need to set some additional
@@ -7464,6 +7589,9 @@ func NewLocalForceCloseSummary(chanState *channeldb.OpenChannel,
 				HashType: sweepSigHash(chanState.ChanType),
 			},
 			MaturityDelay: csvTimeout,
+			LeaseExpiry:   leaseExpiry,
+			IsInitiator:   chanState.IsInitiator,
+			ChanType:      chanState.ChanType,
 		}
 
 		// For taproot channels, we'll need to set some additional

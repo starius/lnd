@@ -31,6 +31,7 @@ import (
 	"github.com/btcsuite/btcwallet/waddrmgr"
 	"github.com/btcsuite/btcwallet/wallet/txauthor"
 	"github.com/davecgh/go-spew/spew"
+	"github.com/golang/snappy"
 	proxy "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/lightningnetwork/lnd/autopilot"
 	"github.com/lightningnetwork/lnd/build"
@@ -7238,17 +7239,61 @@ func (r *rpcServer) ExportChannelBackup(ctx context.Context,
 			return nil, fmt.Errorf("GetLocalForceCloseSummary failed for "+
 				"ChannelPoint(%v): %w", chanPoint, err)
 		}
+
+		var txBuf bytes.Buffer
+		if err := closeSummary.CloseTx.Serialize(&txBuf); err != nil {
+			panic(err)
+		}
+		fmt.Println("CloseTx", hex.EncodeToString(txBuf.Bytes()))
+
+		_, bestHeight, err := r.server.cc.ChainIO.GetBestBlock()
+		if err != nil {
+			return nil, err
+		}
+
+		inp, err := closeSummary.CommitResolution.MakeCommitSweepInput(uint32(bestHeight))
+		if err != nil {
+			panic(err)
+		}
+
+		sweepTx, err := r.server.sweeper.CreateSweepTx(
+			[]input.Input{inp},
+			sweep.FeePreference{
+				ConfTarget: 6,
+			},
+			0,
+		)
+		if err != nil {
+			return nil, err
+		}
+		var sweepTxBuf bytes.Buffer
+		if err := sweepTx.Serialize(&sweepTxBuf); err != nil {
+			panic(err)
+		}
+		fmt.Println("SweepTx", hex.EncodeToString(sweepTxBuf.Bytes()))
+
+		channelJson, err := json.Marshal(channel)
+		if err != nil {
+			return nil, err
+		}
+		fmt.Println("channelJson", string(channelJson))
+		channelJsonCompressed := snappy.Encode(nil, channelJson)
+
+		//closeSummaryJson, err := json.MarshalIndent(closeSummary, "", "  ")
 		closeSummaryJson, err := json.Marshal(closeSummary)
 		if err != nil {
 			return nil, fmt.Errorf("close summary JSON encoding failed for "+
 				"ChannelPoint(%v): %w", chanPoint, err)
 		}
+		fmt.Println("closeSummaryJson", string(closeSummaryJson))
+		compressed := snappy.Encode(nil, closeSummaryJson)
+		fmt.Println("compression", len(closeSummaryJson), len(compressed), len(channelJson), len(channelJsonCompressed))
 		e, err := lnencrypt.KeyRingEncrypter(r.server.cc.KeyRing)
 		if err != nil {
 			return nil, fmt.Errorf("lnencrypt.KeyRingEncrypter failed: %w", err)
 		}
 		var buf bytes.Buffer
-		if err := e.EncryptPayloadToWriter(closeSummaryJson, &buf); err != nil {
+		if err := e.EncryptPayloadToWriter(compressed, &buf); err != nil {
 			return nil, fmt.Errorf("encryption failed for "+
 				"ChannelPoint(%v): %w", chanPoint, err)
 		}
