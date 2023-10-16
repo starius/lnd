@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	prand "math/rand"
@@ -23,6 +24,7 @@ import (
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/go-errors/errors"
+	"github.com/golang/snappy"
 	sphinx "github.com/lightningnetwork/lightning-onion"
 	"github.com/lightningnetwork/lnd/aliasmgr"
 	"github.com/lightningnetwork/lnd/autopilot"
@@ -4687,6 +4689,71 @@ func (s *server) SendCustomMessage(peerPub [33]byte, msgType lnwire.MessageType,
 	// Send the message as low-priority. For now we assume that all
 	// application-defined message are low priority.
 	return peer.SendMessageLazy(true, msg)
+}
+
+// getDbChannels returns current channels state in encrypted form.
+func (s *server) getDbChannels(all bool, chanPoint *wire.OutPoint) ([]byte, error) {
+	var channels []*channeldb.OpenChannel
+	if all {
+		var err error
+		channels, err = s.chanStateDB.FetchAllChannels()
+		if err != nil {
+			return nil, fmt.Errorf("chanStateDB.FetchAllChannels failed: %w", err)
+		}
+	} else {
+		channel, err := s.chanStateDB.FetchChannel(nil, *chanPoint)
+		if err != nil {
+			return nil, fmt.Errorf("chanStateDB.FetchChannel failed: %w", err)
+		}
+		channels = append(channels, channel)
+	}
+
+	return EncryptDbChannels(s.cc.KeyRing, channels)
+}
+
+// EncryptDbChannels marshals and encrypts db channels.
+func EncryptDbChannels(keyRing keychain.KeyRing, channels []*channeldb.OpenChannel) ([]byte, error) {
+	channelsJson, err := json.Marshal(channels)
+	if err != nil {
+		return nil, fmt.Errorf("json.Marshal failed: %w", err)
+	}
+
+	compressed := snappy.Encode(nil, channelsJson)
+
+	e, err := lnencrypt.KeyRingEncrypter(keyRing)
+	if err != nil {
+		return nil, fmt.Errorf("lnencrypt.KeyRingEncrypter failed: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := e.EncryptPayloadToWriter(compressed, &buf); err != nil {
+		return nil, fmt.Errorf("encryption failed: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+// DecryptDbChannels decrypts and parses db channels.
+func DecryptDbChannels(keyRing keychain.KeyRing, encrypted []byte) ([]*channeldb.OpenChannel, error) {
+	e, err := lnencrypt.KeyRingEncrypter(keyRing)
+	if err != nil {
+		return nil, fmt.Errorf("lnencrypt.KeyRingEncrypter failed: %w", err)
+	}
+	plaintext, err := e.DecryptPayloadFromReader(bytes.NewReader(encrypted))
+	if err != nil {
+		return nil, fmt.Errorf("decryption failed: %w", err)
+	}
+
+	channelsJson, err := snappy.Decode(nil, plaintext)
+	if err != nil {
+		return nil, fmt.Errorf("snappy.Decode failed: %w", err)
+	}
+
+	var channels []*channeldb.OpenChannel
+	if err := json.Unmarshal(channelsJson, &channels); err != nil {
+		return nil, fmt.Errorf("json.Unmarshal failed: %w", err)
+	}
+
+	return channels, nil
 }
 
 // newSweepPkScriptGen creates closure that generates a new public key script

@@ -7216,9 +7216,20 @@ func (r *rpcServer) ExportChannelBackup(ctx context.Context,
 			len(packedBackup))
 	}
 
+	// Export of current channels state.
+	var dbChannels []byte
+	if in.IncludeDbChannels {
+		dbChannels, err = r.server.getDbChannels(false, &chanPoint)
+		if err != nil {
+			return nil, fmt.Errorf("server.getDbChannels(%v, %v) failed: %w",
+				false, chanPoint, err)
+		}
+	}
+
 	return &lnrpc.ChannelBackup{
 		ChanPoint:  in.ChanPoint,
 		ChanBackup: packedBackup,
+		DbChannels: dbChannels,
 	}, nil
 }
 
@@ -7368,7 +7379,21 @@ func (r *rpcServer) ExportAllChannelBackups(ctx context.Context,
 	}
 
 	// With the backups assembled, we'll create a full snapshot.
-	return r.createBackupSnapshot(allUnpackedBackups)
+	res, err := r.createBackupSnapshot(allUnpackedBackups)
+	if err != nil {
+		return nil, err
+	}
+
+	// Export of current channels state.
+	if in.IncludeDbChannels {
+		res.DbChannels, err = r.server.getDbChannels(true, nil)
+		if err != nil {
+			return nil, fmt.Errorf("server.getDbChannels(%v, %v) failed: %w",
+				true, nil, err)
+		}
+	}
+
+	return res, nil
 }
 
 // RestoreChannelBackups accepts a set of singular channel backups, or a single
