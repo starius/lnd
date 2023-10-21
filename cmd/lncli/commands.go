@@ -2297,7 +2297,7 @@ var exportChanBackupCommand = cli.Command{
 	Category: "Channels",
 	Usage: "Obtain a static channel back up for a selected channels, " +
 		"or all known channels.",
-	ArgsUsage: "[chan_point] [--all] [--output_file]",
+	ArgsUsage: "[chan_point] [--all] [--output_file] [--db_channels]",
 	Description: `
 	This command allows a user to export a Static Channel Backup (SCB) for
 	a selected channel. SCB's are encrypted backups of a channel's initial
@@ -2341,6 +2341,11 @@ var exportChanBackupCommand = cli.Command{
 			the target file, this is the same format used by lnd in
 			its channel.backup file `,
 		},
+		cli.BoolFlag{
+			Name: "db_channels",
+			Usage: "if specified, then the most recent channels state " +
+				"is returned as well",
+		},
 	},
 	Action: actionDecorator(exportChanBackup),
 }
@@ -2374,6 +2379,10 @@ func exportChanBackup(ctx *cli.Context) error {
 		return fmt.Errorf("must specify chan_point if --all isn't set")
 	}
 
+	if ctx.IsSet("output_file") && ctx.IsSet("db_channels") {
+		return fmt.Errorf("--output_file with --db_channels do not work together")
+	}
+
 	if ctx.IsSet("output_file") {
 		outputFileName = ctx.String("output_file")
 	}
@@ -2386,7 +2395,8 @@ func exportChanBackup(ctx *cli.Context) error {
 
 		chanBackup, err := client.ExportChannelBackup(
 			ctxc, &lnrpc.ExportChannelBackupRequest{
-				ChanPoint: chanPointRPC,
+				ChanPoint:         chanPointRPC,
+				IncludeDbChannels: ctx.IsSet("db_channels"),
 			},
 		)
 		if err != nil {
@@ -2416,9 +2426,11 @@ func exportChanBackup(ctx *cli.Context) error {
 		printJSON(struct {
 			ChanPoint  string `json:"chan_point"`
 			ChanBackup []byte `json:"chan_backup"`
+			DbChannels []byte `json:"db_channels,omitempty"`
 		}{
 			ChanPoint:  chanPoint.String(),
 			ChanBackup: chanBackup.ChanBackup,
+			DbChannels: chanBackup.DbChannels,
 		})
 		return nil
 	}
@@ -2428,7 +2440,9 @@ func exportChanBackup(ctx *cli.Context) error {
 	}
 
 	chanBackup, err := client.ExportAllChannelBackups(
-		ctxc, &lnrpc.ChanBackupExportRequest{},
+		ctxc, &lnrpc.ChanBackupExportRequest{
+			IncludeDbChannels: ctx.IsSet("db_channels"),
+		},
 	)
 	if err != nil {
 		return err

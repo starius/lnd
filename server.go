@@ -65,6 +65,7 @@ import (
 	"github.com/lightningnetwork/lnd/routing"
 	"github.com/lightningnetwork/lnd/routing/localchans"
 	"github.com/lightningnetwork/lnd/routing/route"
+	"github.com/lightningnetwork/lnd/shachain"
 	"github.com/lightningnetwork/lnd/subscribe"
 	"github.com/lightningnetwork/lnd/sweep"
 	"github.com/lightningnetwork/lnd/ticker"
@@ -4711,9 +4712,39 @@ func (s *server) getDbChannels(all bool, chanPoint *wire.OutPoint) ([]byte, erro
 	return EncryptDbChannels(s.cc.KeyRing, channels)
 }
 
+type openChannel struct {
+	*channeldb.OpenChannel
+
+	// Replacements for fields breaking JSON.
+	Producer *shachain.RevocationProducer `json:"RevocationProducer"`
+	Store    *shachain.RevocationStore    `json:"RevocationStore"`
+}
+
 // EncryptDbChannels marshals and encrypts db channels.
 func EncryptDbChannels(keyRing keychain.KeyRing, channels []*channeldb.OpenChannel) ([]byte, error) {
-	channelsJson, err := json.Marshal(channels)
+	// Prepare intermediate JSON friendly struct.
+	channels2 := make([]openChannel, 0, len(channels))
+	for _, c := range channels {
+		producer, ok := c.RevocationProducer.(*shachain.RevocationProducer)
+		if !ok {
+			return nil, fmt.Errorf("type of c.RevocationProducer is unknown: %T", c.RevocationProducer)
+		}
+		c.RevocationProducer = nil
+		store, ok := c.RevocationStore.(*shachain.RevocationStore)
+		if !ok {
+			return nil, fmt.Errorf("type of c.RevocationStore is unknown: %T", c.RevocationStore)
+		}
+		c.RevocationStore = nil
+		c.Db = nil
+		c.Packager = nil
+		channels2 = append(channels2, openChannel{
+			OpenChannel: c,
+			Producer:    producer,
+			Store:       store,
+		})
+	}
+
+	channelsJson, err := json.Marshal(channels2)
 	if err != nil {
 		return nil, fmt.Errorf("json.Marshal failed: %w", err)
 	}
@@ -4748,11 +4779,18 @@ func DecryptDbChannels(keyRing keychain.KeyRing, encrypted []byte) ([]*channeldb
 		return nil, fmt.Errorf("snappy.Decode failed: %w", err)
 	}
 
-	var channels []*channeldb.OpenChannel
-	if err := json.Unmarshal(channelsJson, &channels); err != nil {
+	var channels2 []openChannel
+	if err := json.Unmarshal(channelsJson, &channels2); err != nil {
 		return nil, fmt.Errorf("json.Unmarshal failed: %w", err)
 	}
-
+	channels := make([]*channeldb.OpenChannel, 0, len(channels2))
+	for _, c2 := range channels2 {
+		c := c2.OpenChannel
+		c.RevocationProducer = c2.Producer
+		c.RevocationStore = c2.Store
+		c.Packager = channeldb.NewChannelPackager(c.ShortChannelID)
+		channels = append(channels, c)
+	}
 	return channels, nil
 }
 

@@ -1,6 +1,8 @@
 package shachain
 
 import (
+	"bytes"
+	"encoding/json"
 	"io"
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -38,6 +40,8 @@ type RevocationProducer struct {
 // A compile time check to ensure RevocationProducer implements the Producer
 // interface.
 var _ Producer = (*RevocationProducer)(nil)
+var _ json.Marshaler = (*RevocationProducer)(nil)
+var _ json.Unmarshaler = (*RevocationProducer)(nil)
 
 // NewRevocationProducer creates new instance of shachain producer.
 func NewRevocationProducer(root chainhash.Hash) *RevocationProducer {
@@ -87,4 +91,29 @@ func (p *RevocationProducer) AtIndex(v uint64) (*chainhash.Hash, error) {
 func (p *RevocationProducer) Encode(w io.Writer) error {
 	_, err := w.Write(p.root.hash[:])
 	return err
+}
+
+// MarshalJSON serialises the producer as a JSON appropriate string value.
+func (p *RevocationProducer) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	if err := p.Encode(&buf); err != nil {
+		return nil, err
+	}
+	return json.Marshal(buf.Bytes())
+}
+
+// UnmarshalJSON parses the producer with JSON appropriate string value.
+func (p *RevocationProducer) UnmarshalJSON(input []byte) error {
+	var data []byte
+	if err := json.Unmarshal(input, &data); err != nil {
+		return err
+	}
+
+	p2, err := NewRevocationProducerFromBytes(data)
+	if err != nil {
+		return err
+	}
+
+	*p = *p2
+	return nil
 }

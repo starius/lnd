@@ -1,7 +1,9 @@
 package shachain
 
 import (
+	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"io"
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -56,6 +58,8 @@ type RevocationStore struct {
 // A compile time check to ensure RevocationStore implements the Store
 // interface.
 var _ Store = (*RevocationStore)(nil)
+var _ json.Marshaler = (*RevocationStore)(nil)
+var _ json.Unmarshaler = (*RevocationStore)(nil)
 
 // NewRevocationStore creates the new shachain store.
 func NewRevocationStore() *RevocationStore {
@@ -181,4 +185,29 @@ func (store *RevocationStore) Encode(w io.Writer) error {
 	}
 
 	return binary.Write(w, binary.BigEndian, store.index)
+}
+
+// MarshalJSON serialises the store as a JSON appropriate string value.
+func (s *RevocationStore) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	if err := s.Encode(&buf); err != nil {
+		return nil, err
+	}
+	return json.Marshal(buf.Bytes())
+}
+
+// UnmarshalJSON parses the store with JSON appropriate string value.
+func (s *RevocationStore) UnmarshalJSON(input []byte) error {
+	var data []byte
+	if err := json.Unmarshal(input, &data); err != nil {
+		return err
+	}
+
+	s2, err := NewRevocationStoreFromBytes(bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+
+	*s = *s2
+	return nil
 }
