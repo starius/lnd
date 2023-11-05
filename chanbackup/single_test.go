@@ -215,6 +215,8 @@ func TestSinglePackUnpack(t *testing.T) {
 		// decode/encode the final SCB.
 		version SingleBackupVersion
 
+		closeTx []byte
+
 		// valid tests us if this test case should pass or not.
 		valid bool
 	}{
@@ -250,11 +252,39 @@ func TestSinglePackUnpack(t *testing.T) {
 			version: 99,
 			valid:   false,
 		},
+
+		// Versions with CloseTx.
+		{
+			version: DefaultSingleVersion,
+			closeTx: []byte{1, 2, 3},
+			valid:   true,
+		},
+		{
+			version: TweaklessCommitVersion,
+			closeTx: []byte{1, 2, 3},
+			valid:   true,
+		},
+		{
+			version: AnchorsCommitVersion,
+			closeTx: []byte{1, 2, 3},
+			valid:   true,
+		},
+		{
+			version: ScriptEnforcedLeaseVersion,
+			closeTx: []byte{1, 2, 3},
+			valid:   true,
+		},
+		{
+			version: 99,
+			closeTx: []byte{1, 2, 3},
+			valid:   false,
+		},
 	}
 	for i, versionCase := range versionTestCases {
 		// First, we'll re-assign SCB version to what was indicated in
 		// the test case.
 		singleChanBackup.Version = versionCase.version
+		singleChanBackup.CloseTx = versionCase.closeTx
 
 		var b bytes.Buffer
 
@@ -284,6 +314,12 @@ func TestSinglePackUnpack(t *testing.T) {
 			}
 
 			assertSingleEqual(t, singleChanBackup, unpackedSingle)
+
+			if len(singleChanBackup.CloseTx) != 0 {
+				if !bytes.Equal(singleChanBackup.CloseTx, unpackedSingle.CloseTx) {
+					t.Fatalf("#%v failed to unpack to same CloseTx", i)
+				}
+			}
 
 			// If this was a valid packing attempt, then we'll test
 			// to ensure that if we mutate the version prepended to
