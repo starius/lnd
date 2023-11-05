@@ -95,6 +95,28 @@ func assertSingleEqual(t *testing.T, a, b Single) {
 				a.Addresses[i], b.Addresses[i])
 		}
 	}
+
+	// Make sure that CloseTxInputs are present either in both backups,
+	// or in none of them.
+	require.Equal(t, a.CloseTxInputs != nil, b.CloseTxInputs != nil)
+
+	if a.CloseTxInputs != nil {
+		// Cache CloseTxInputs into short variables.
+		ai := a.CloseTxInputs
+		bi := b.CloseTxInputs
+
+		// Compare serialized unsigned transactions.
+		var abuf, bbuf bytes.Buffer
+		require.NoError(t, ai.CommitTx.Serialize(&abuf))
+		require.NoError(t, bi.CommitTx.Serialize(&bbuf))
+		aBytes := abuf.Bytes()
+		bBytes := bbuf.Bytes()
+		require.Equal(t, aBytes, bBytes)
+
+		// Compare counterparty's signature and commit height.
+		require.Equal(t, ai.CommitSig, bi.CommitSig)
+		require.Equal(t, ai.CommitHeight, bi.CommitHeight)
+	}
 }
 
 func genRandomOpenChannelShell() (*channeldb.OpenChannel, error) {
@@ -210,10 +232,23 @@ func TestSinglePackUnpack(t *testing.T) {
 
 	keyRing := &lnencrypt.MockKeyRing{}
 
+	commitTx := &wire.MsgTx{
+		TxIn: []*wire.TxIn{
+			{PreviousOutPoint: wire.OutPoint{Hash: [32]byte{1}}},
+		},
+		TxOut: []*wire.TxOut{
+			{Value: 1e8, PkScript: []byte("1")},
+			{Value: 2e8, PkScript: []byte("2")},
+		},
+	}
+
 	versionTestCases := []struct {
 		// version is the pack/unpack version that we should use to
 		// decode/encode the final SCB.
 		version SingleBackupVersion
+
+		// closeTxInputs is the data needed to produce a force close tx.
+		closeTxInputs *CloseTxInputs
 
 		// valid tests us if this test case should pass or not.
 		valid bool
@@ -257,11 +292,72 @@ func TestSinglePackUnpack(t *testing.T) {
 			version: 99,
 			valid:   false,
 		},
+
+		// Versions with CloseTxInputs.
+		{
+			version: DefaultSingleVersion,
+			closeTxInputs: &CloseTxInputs{
+				CommitTx:  commitTx,
+				CommitSig: []byte("signature"),
+			},
+			valid: true,
+		},
+		{
+			version: TweaklessCommitVersion,
+			closeTxInputs: &CloseTxInputs{
+				CommitTx:  commitTx,
+				CommitSig: []byte("signature"),
+			},
+			valid: true,
+		},
+		{
+			version: AnchorsCommitVersion,
+			closeTxInputs: &CloseTxInputs{
+				CommitTx:  commitTx,
+				CommitSig: []byte("signature"),
+			},
+			valid: true,
+		},
+		{
+			version: ScriptEnforcedLeaseVersion,
+			closeTxInputs: &CloseTxInputs{
+				CommitTx:  commitTx,
+				CommitSig: []byte("signature"),
+			},
+			valid: true,
+		},
+		{
+			version: SimpleTaprootVersion,
+			closeTxInputs: &CloseTxInputs{
+				CommitTx:     commitTx,
+				CommitSig:    []byte("signature"),
+				CommitHeight: 42,
+			},
+			valid: true,
+		},
+		{
+			version: 99,
+			closeTxInputs: &CloseTxInputs{
+				CommitTx:  commitTx,
+				CommitSig: []byte("signature"),
+			},
+			valid: false,
+		},
+		{
+			version: 99,
+			closeTxInputs: &CloseTxInputs{
+				CommitTx:     commitTx,
+				CommitSig:    []byte("signature"),
+				CommitHeight: 42,
+			},
+			valid: false,
+		},
 	}
 	for i, versionCase := range versionTestCases {
 		// First, we'll re-assign SCB version to what was indicated in
 		// the test case.
 		singleChanBackup.Version = versionCase.version
+		singleChanBackup.CloseTxInputs = versionCase.closeTxInputs
 
 		var b bytes.Buffer
 
