@@ -9,6 +9,7 @@ import (
 
 	"github.com/btcsuite/btcd/wire"
 	"github.com/lightningnetwork/lnd/channeldb"
+	"github.com/lightningnetwork/lnd/input"
 	"github.com/lightningnetwork/lnd/keychain"
 )
 
@@ -93,6 +94,9 @@ type SubSwapper struct {
 	// multi backup.
 	keyRing keychain.KeyRing
 
+	// signer is used to sign CloseTx.
+	signer input.Signer
+
 	Swapper
 
 	quit chan struct{}
@@ -104,7 +108,13 @@ type SubSwapper struct {
 // updates, pack a multi backup, and swap the current best backup from its
 // storage location.
 func NewSubSwapper(startingChans []Single, chanNotifier ChannelNotifier,
-	keyRing keychain.KeyRing, backupSwapper Swapper) (*SubSwapper, error) {
+	keyRing keychain.KeyRing, backupSwapper Swapper,
+	options ...BackupOption) (*SubSwapper, error) {
+
+	var config BackupConfig
+	for _, opt := range options {
+		opt(&config)
+	}
 
 	// First, we'll subscribe to the latest set of channel updates given
 	// the set of channels we already know of.
@@ -128,6 +138,7 @@ func NewSubSwapper(startingChans []Single, chanNotifier ChannelNotifier,
 		backupState: backupState,
 		chanEvents:  chanEvents,
 		keyRing:     keyRing,
+		signer:      config.signer,
 		Swapper:     backupSwapper,
 		quit:        make(chan struct{}),
 	}, nil
@@ -266,9 +277,17 @@ func (s *SubSwapper) backupUpdater() {
 				log.Debugf("Adding channel %v to backup state",
 					newChan.FundingOutpoint)
 
-				s.backupState[newChan.FundingOutpoint] = NewSingle(
-					newChan.OpenChannel, newChan.Addrs,
-				)
+				single := NewSingle(newChan.OpenChannel, newChan.Addrs)
+				if s.signer != nil {
+					// Add CloseTx.
+					closeTx, err := buildCloseTx(newChan.OpenChannel, s.signer)
+					if err != nil {
+						log.Errorf("unable to create close tx for ChannelPoint(%v): %v", newChan.OpenChannel, err)
+					} else {
+						single.CloseTx = closeTx
+					}
+				}
+				s.backupState[newChan.FundingOutpoint] = single
 			}
 
 			// For all closed channels, we'll remove the prior
