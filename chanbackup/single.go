@@ -52,6 +52,9 @@ const (
 	// SimpleTaprootVersion is a version that denotes this channel is using
 	// the musig2 based taproot commitment format.
 	SimpleTaprootVersion = 5
+
+	// XORed to some version on wire indicating that the backup has CloseTx.
+	closeTxVersion = 8
 )
 
 // Single is a static description of an existing channel that can be used for
@@ -138,6 +141,8 @@ type Single struct {
 	//
 	// - ScriptEnforcedLeaseVersion
 	LeaseExpiry uint32
+
+	CloseTx []byte
 }
 
 // NewSingle creates a new static channel backup based on an existing open
@@ -327,9 +332,18 @@ func (s *Single) Serialize(w io.Writer) error {
 		return fmt.Errorf("expect io.Writer to be *bytes.Buffer")
 	}
 
+	version := s.Version
+	if len(s.CloseTx) != 0 {
+		version |= closeTxVersion
+		err := lnwire.WriteElements(&singleBytes, uint16(len(s.CloseTx)), s.CloseTx)
+		if err != nil {
+			return err
+		}
+	}
+
 	return lnwire.WriteElements(
 		buf,
-		byte(s.Version),
+		byte(version),
 		uint16(len(singleBytes.Bytes())),
 		singleBytes.Bytes(),
 	)
@@ -420,7 +434,9 @@ func (s *Single) Deserialize(r io.Reader) error {
 		return err
 	}
 
-	s.Version = SingleBackupVersion(version)
+	hasCloseTx := (version & closeTxVersion) != 0
+
+	s.Version = SingleBackupVersion(version &^ closeTxVersion)
 
 	switch s.Version {
 	case DefaultSingleVersion:
@@ -529,6 +545,17 @@ func (s *Single) Deserialize(r io.Reader) error {
 
 	if s.Version == ScriptEnforcedLeaseVersion {
 		if err := lnwire.ReadElement(r, &s.LeaseExpiry); err != nil {
+			return err
+		}
+	}
+
+	if hasCloseTx {
+		var closeTxLen uint16
+		if err := lnwire.ReadElement(r, &closeTxLen); err != nil {
+			return err
+		}
+		s.CloseTx = make([]byte, closeTxLen)
+		if err := lnwire.ReadElement(r, s.CloseTx); err != nil {
 			return err
 		}
 	}
