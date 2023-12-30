@@ -53,7 +53,8 @@ const (
 	// the musig2 based taproot commitment format.
 	SimpleTaprootVersion = 5
 
-	// XORed to some version on wire indicating that the backup has CloseTx.
+	// Byte mask used that is ORed to version byte on wire indicating that
+	// the backup has CloseTxInputs.
 	closeTxVersionMask = 1 << 7
 )
 
@@ -142,7 +143,28 @@ type Single struct {
 	// - ScriptEnforcedLeaseVersion
 	LeaseExpiry uint32
 
-	CloseTx []byte
+	CloseTxInputs *CloseTxInputs
+}
+
+type CloseTxInputs struct {
+	// CommitTx is the latest version of the commitment state, broadcast
+	// able by us, but not signed.
+	// It can be signed by "chantools scbforceclose" command.
+	CommitTx *wire.MsgTx
+
+	// CommitSig is one half of the signature required to fully complete
+	// the script for the commitment transaction above. This is the
+	// signature signed by the remote party for our version of the
+	// commitment transactions.
+	CommitSig []byte
+
+	// CommitHeight is the update number that this ChannelDelta represents
+	// the total number of commitment updates to this point. This can be
+	// viewed as sort of a "commitment height" as this number is
+	// monotonically increasing.
+	//
+	// This field is filled only for taproot channels.
+	CommitHeight uint64
 }
 
 // NewSingle creates a new static channel backup based on an existing open
@@ -326,11 +348,31 @@ func (s *Single) Serialize(w io.Writer) error {
 	}
 
 	version := s.Version
-	if len(s.CloseTx) != 0 {
+	if s.CloseTxInputs != nil {
 		version |= closeTxVersionMask
-		err := lnwire.WriteElements(&singleBytes, uint16(len(s.CloseTx)), s.CloseTx)
-		if err != nil {
+
+		var txBuf bytes.Buffer
+		if err := s.CloseTxInputs.CommitTx.Serialize(&txBuf); err != nil {
 			return err
+		}
+		txBytes := txBuf.Bytes()
+		if err := lnwire.WriteElements(
+			&singleBytes,
+			uint16(len(txBytes)),
+			txBytes,
+			uint16(len(s.CloseTxInputs.CommitSig)),
+			s.CloseTxInputs.CommitSig,
+		); err != nil {
+			return err
+		}
+
+		if s.Version == SimpleTaprootVersion {
+			if err := lnwire.WriteElements(
+				&singleBytes,
+				s.CloseTxInputs.CommitHeight,
+			); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -550,13 +592,40 @@ func (s *Single) Deserialize(r io.Reader) error {
 	}
 
 	if hasCloseTx {
-		var closeTxLen uint16
-		if err := lnwire.ReadElement(r, &closeTxLen); err != nil {
+		var commitTxLen uint16
+		if err := lnwire.ReadElement(r, &commitTxLen); err != nil {
 			return err
 		}
-		s.CloseTx = make([]byte, closeTxLen)
-		if err := lnwire.ReadElement(r, s.CloseTx); err != nil {
+		commitTxBytes := make([]byte, commitTxLen)
+		if err := lnwire.ReadElement(r, commitTxBytes); err != nil {
 			return err
+		}
+		commitTx := &wire.MsgTx{}
+		err := commitTx.Deserialize(bytes.NewReader(commitTxBytes))
+		if err != nil {
+			return nil
+		}
+
+		var commitSigLen uint16
+		if err := lnwire.ReadElement(r, &commitSigLen); err != nil {
+			return err
+		}
+		commitSig := make([]byte, commitSigLen)
+		if err := lnwire.ReadElement(r, commitSig); err != nil {
+			return err
+		}
+
+		var commitHeight uint64
+		if s.Version == SimpleTaprootVersion {
+			if err := lnwire.ReadElement(r, &commitHeight); err != nil {
+				return err
+			}
+		}
+
+		s.CloseTxInputs = &CloseTxInputs{
+			CommitTx:     commitTx,
+			CommitSig:    commitSig,
+			CommitHeight: commitHeight,
 		}
 	}
 

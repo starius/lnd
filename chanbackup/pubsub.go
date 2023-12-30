@@ -9,7 +9,6 @@ import (
 
 	"github.com/btcsuite/btcd/wire"
 	"github.com/lightningnetwork/lnd/channeldb"
-	"github.com/lightningnetwork/lnd/input"
 	"github.com/lightningnetwork/lnd/keychain"
 )
 
@@ -94,13 +93,14 @@ type SubSwapper struct {
 	// multi backup.
 	keyRing keychain.KeyRing
 
-	// signer is used to sign CloseTx.
-	signer input.Signer
-
 	Swapper
 
 	quit chan struct{}
 	wg   sync.WaitGroup
+
+	// Whether to put CloseTxInputs into a backup. A backup with this data
+	// can be used by "chantools scbforceclose" command.
+	includeCloseTxInputs bool
 }
 
 // NewSubSwapper creates a new instance of the SubSwapper given the starting
@@ -138,9 +138,10 @@ func NewSubSwapper(startingChans []Single, chanNotifier ChannelNotifier,
 		backupState: backupState,
 		chanEvents:  chanEvents,
 		keyRing:     keyRing,
-		signer:      config.signer,
 		Swapper:     backupSwapper,
 		quit:        make(chan struct{}),
+
+		includeCloseTxInputs: config.includeCloseTxInputs,
 	}, nil
 }
 
@@ -277,14 +278,10 @@ func (s *SubSwapper) backupUpdater() {
 					newChan.FundingOutpoint)
 
 				single := NewSingle(newChan.OpenChannel, newChan.Addrs)
-				if s.signer != nil {
-					// Add CloseTx.
-					closeTx, err := buildCloseTx(newChan.OpenChannel, s.signer)
-					if err != nil {
-						log.Errorf("unable to create close tx for ChannelPoint(%v): %v", newChan.OpenChannel, err)
-					} else {
-						single.CloseTx = closeTx
-					}
+				if s.includeCloseTxInputs {
+					single.CloseTxInputs = buildCloseTxInputs(
+						newChan.OpenChannel,
+					)
 				}
 				s.backupState[newChan.FundingOutpoint] = single
 			}

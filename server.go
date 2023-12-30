@@ -1476,14 +1476,14 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 	backupFile := chanbackup.NewMultiFile(cfg.BackupFilePath)
 	startingChans, err := chanbackup.FetchStaticChanBackups(
 		s.chanStateDB, s.addrSource,
-		chanbackup.WithCloseTx(s.cc.Signer),
+		chanbackup.WithCloseTxInputs(true),
 	)
 	if err != nil {
 		return nil, err
 	}
 	s.chanSubSwapper, err = chanbackup.NewSubSwapper(
 		startingChans, chanNotifier, s.cc.KeyRing, backupFile,
-		chanbackup.WithCloseTx(s.cc.Signer),
+		chanbackup.WithCloseTxInputs(true),
 	)
 	if err != nil {
 		return nil, err

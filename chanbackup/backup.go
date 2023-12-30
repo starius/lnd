@@ -1,16 +1,13 @@
 package chanbackup
 
 import (
-	"bytes"
 	"fmt"
 	"net"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/lightningnetwork/lnd/channeldb"
-	"github.com/lightningnetwork/lnd/input"
 	"github.com/lightningnetwork/lnd/kvdb"
-	"github.com/lightningnetwork/lnd/lnwallet"
 )
 
 // LiveChannelSource is an interface that allows us to query for the set of
@@ -56,31 +53,31 @@ func assembleChanBackup(addrSource AddressSource,
 	return &single, nil
 }
 
-func buildCloseTx(targetChan *channeldb.OpenChannel, signer input.Signer) ([]byte, error) {
-	chanMachine, err := lnwallet.NewLightningChannel(signer, targetChan, nil)
-	if err != nil {
-		return nil, fmt.Errorf("lnwallet.NewLightningChannel failed: %w", err)
+func buildCloseTxInputs(targetChan *channeldb.OpenChannel) *CloseTxInputs {
+	localCommit := targetChan.LocalCommitment
+	inputs := &CloseTxInputs{
+		CommitTx:  localCommit.CommitTx,
+		CommitSig: localCommit.CommitSig,
 	}
-	closeSummary, err := chanMachine.GetLocalForceCloseSummary()
-	if err != nil {
-		return nil, fmt.Errorf("GetLocalForceCloseSummary failed: %w", err)
+
+	if targetChan.ChanType.IsTaproot() {
+		inputs.CommitHeight = localCommit.CommitHeight
 	}
-	var txBuf bytes.Buffer
-	if err := closeSummary.CloseTx.Serialize(&txBuf); err != nil {
-		return nil, fmt.Errorf("CloseTx.Serialize failed: %w", err)
-	}
-	return txBuf.Bytes(), nil
+
+	return inputs
 }
 
 type BackupConfig struct {
-	signer input.Signer
+	// Whether to put CloseTxInputs into a backup. A backup with this data
+	// can be used by "chantools scbforceclose" command.
+	includeCloseTxInputs bool
 }
 
 type BackupOption func(*BackupConfig)
 
-func WithCloseTx(signer input.Signer) BackupOption {
+func WithCloseTxInputs(include bool) BackupOption {
 	return func(c *BackupConfig) {
-		c.signer = signer
+		c.includeCloseTxInputs = include
 	}
 }
 
@@ -111,13 +108,8 @@ func FetchBackupForChan(chanPoint wire.OutPoint, chanSource LiveChannelSource,
 		return nil, fmt.Errorf("unable to create chan backup: %v", err)
 	}
 
-	if config.signer != nil {
-		// Add CloseTx.
-		closeTx, err := buildCloseTx(targetChan, config.signer)
-		if err != nil {
-			return nil, fmt.Errorf("unable to create close tx for ChannelPoint(%v): %w", targetChan, err)
-		}
-		staticChanBackup.CloseTx = closeTx
+	if config.includeCloseTxInputs {
+		staticChanBackup.CloseTxInputs = buildCloseTxInputs(targetChan)
 	}
 
 	return staticChanBackup, nil
@@ -150,13 +142,8 @@ func FetchStaticChanBackups(chanSource LiveChannelSource,
 			return nil, err
 		}
 
-		if config.signer != nil {
-			// Add CloseTx.
-			closeTx, err := buildCloseTx(openChan, config.signer)
-			if err != nil {
-				return nil, fmt.Errorf("unable to create close tx for ChannelPoint(%v): %w", openChan, err)
-			}
-			chanBackup.CloseTx = closeTx
+		if config.includeCloseTxInputs {
+			chanBackup.CloseTxInputs = buildCloseTxInputs(openChan)
 		}
 
 		staticChanBackups = append(staticChanBackups, *chanBackup)
