@@ -63,6 +63,7 @@ func buildCloseTxInputs(targetChan *channeldb.OpenChannel) *CloseTxInputs {
 		log.Infof("CommitTx is nil for ChannelPoint(%v), "+
 			"skipping CloseTxInputs. This is possible when "+
 			"DLP is active.", targetChan.FundingOutpoint)
+
 		return nil
 	}
 
