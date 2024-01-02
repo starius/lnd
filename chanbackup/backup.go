@@ -54,7 +54,18 @@ func assembleChanBackup(addrSource AddressSource,
 }
 
 func buildCloseTxInputs(targetChan *channeldb.OpenChannel) *CloseTxInputs {
+	log.Debugf("Crafting CloseTxInputs for ChannelPoint(%v)",
+		targetChan.FundingOutpoint)
+
 	localCommit := targetChan.LocalCommitment
+
+	if localCommit.CommitTx == nil {
+		log.Infof("CommitTx is nil for ChannelPoint(%v), "+
+			"skipping CloseTxInputs. This is possible when "+
+			"DLP is active.", targetChan.FundingOutpoint)
+		return nil
+	}
+
 	inputs := &CloseTxInputs{
 		CommitTx:  localCommit.CommitTx,
 		CommitSig: localCommit.CommitSig,

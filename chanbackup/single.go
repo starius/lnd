@@ -359,16 +359,13 @@ func (s *Single) Serialize(w io.Writer) error {
 	if s.CloseTxInputs != nil {
 		version |= closeTxVersionMask
 
-		var txBuf bytes.Buffer
-		err := s.CloseTxInputs.CommitTx.Serialize(&txBuf)
+		err := s.CloseTxInputs.CommitTx.Serialize(&singleBytes)
 		if err != nil {
 			return err
 		}
-		txBytes := txBuf.Bytes()
+
 		if err := lnwire.WriteElements(
 			&singleBytes,
-			uint16(len(txBytes)),
-			txBytes,
 			uint16(len(s.CloseTxInputs.CommitSig)),
 			s.CloseTxInputs.CommitSig,
 		); err != nil {
@@ -601,18 +598,9 @@ func (s *Single) Deserialize(r io.Reader) error {
 	}
 
 	if hasCloseTx {
-		var commitTxLen uint16
-		if err := lnwire.ReadElement(r, &commitTxLen); err != nil {
-			return err
-		}
-		commitTxBytes := make([]byte, commitTxLen)
-		if err := lnwire.ReadElement(r, commitTxBytes); err != nil {
-			return err
-		}
 		commitTx := &wire.MsgTx{}
-		err := commitTx.Deserialize(bytes.NewReader(commitTxBytes))
-		if err != nil {
-			return nil
+		if err := commitTx.Deserialize(r); err != nil {
+			return err
 		}
 
 		var commitSigLen uint16
