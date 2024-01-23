@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/btcsuite/btcd/btcutil"
@@ -425,7 +426,8 @@ type Config struct {
 
 	DryRunMigration bool `long:"dry-run-migration" description:"If true, lnd will abort committing a migration if it would otherwise have been successful. This leaves the database unmodified, and still compatible with the previously active version of lnd."`
 
-	net tor.Net
+	net           tor.Net
+	brokenNetwork *atomic.Bool
 
 	EnableUpfrontShutdown bool `long:"enable-upfront-shutdown" description:"If true, option upfront shutdown script will be enabled. If peers that we open channels with support this feature, we will automatically set the script to which cooperative closes should be paid out to on channel open. This offers the partial protection of a channel peer disconnecting from us if cooperative close is attempted with a different script."`
 
@@ -534,6 +536,11 @@ type GRPCConfig struct {
 //
 //nolint:lll
 func DefaultConfig() Config {
+	var brokenNetwork *atomic.Bool
+	if lncfg.IsDevBuild() {
+		brokenNetwork = &atomic.Bool{}
+	}
+
 	return Config{
 		LndDir:            DefaultLndDir,
 		ConfigFile:        DefaultConfigFile,
@@ -617,7 +624,8 @@ func DefaultConfig() Config {
 			DNS:     defaultTorDNS,
 			Control: defaultTorControl,
 		},
-		net: &tor.ClearNet{},
+		net:           &tor.ClearNet{},
+		brokenNetwork: brokenNetwork,
 		Workers: &lncfg.Workers{
 			Read:  lncfg.DefaultReadWorkers,
 			Write: lncfg.DefaultWriteWorkers,

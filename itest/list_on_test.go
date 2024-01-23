@@ -62,6 +62,10 @@ var allTestCases = []*lntest.TestCase{
 		TestFunc: testFundingExpiryBlocksOnPending,
 	},
 	{
+		Name:     "disconnect while channel confirmed",
+		TestFunc: testDisconnectWhileChannelConfirmed,
+	},
+	{
 		Name:     "list channels",
 		TestFunc: testListChannels,
 	},

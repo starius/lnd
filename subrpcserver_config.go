@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"sync/atomic"
 
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btclog"
@@ -312,6 +313,14 @@ func (s *subRPCServerConfigs) PopulateDependencies(cfg *Config,
 				reflect.ValueOf(graphDB),
 			)
 
+			if cfg.brokenNetwork != nil {
+				subCfgValue.FieldByName("NetworkToggler").Set(
+					reflect.ValueOf(&networkToggler{
+						broken: cfg.brokenNetwork,
+					}),
+				)
+			}
+
 		case *peersrpc.Config:
 			subCfgValue := extractReflectValue(subCfg)
 
@@ -393,4 +402,12 @@ func extractReflectValue(instance interface{}) reflect.Value {
 	}
 
 	return val
+}
+
+type networkToggler struct {
+	broken *atomic.Bool
+}
+
+func (t *networkToggler) ToggleNetwork(broken bool) {
+	t.broken.Store(broken)
 }

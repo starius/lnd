@@ -22,6 +22,8 @@ import (
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gopkg.in/macaroon-bakery.v2/bakery"
 )
 
@@ -37,6 +39,10 @@ var (
 	// macPermissions maps RPC calls to the permissions they require.
 	macPermissions = map[string][]bakery.Op{
 		"/devrpc.Dev/ImportGraph": {{
+			Entity: "offchain",
+			Action: "write",
+		}},
+		"/devrpc.Dev/ToggleNetwork": {{
 			Entity: "offchain",
 			Action: "write",
 		}},
@@ -341,4 +347,21 @@ func (s *Server) ImportGraph(ctx context.Context,
 	}
 
 	return &ImportGraphResponse{}, nil
+}
+
+// ToggleNetwork switches networking in brontide on/off.
+//
+// NOTE: Part of the DevServer interface.
+func (s *Server) ToggleNetwork(ctx context.Context,
+	req *ToggleNetworkRequest) (*ToggleNetworkResponse, error) {
+
+	if s.cfg.NetworkToggler == nil {
+		return nil, status.Errorf(codes.Unimplemented,
+			"cfg.NetworkToggler is not set")
+	}
+
+	log.Debugf("Toggling network: broken=%v", req.BrokenNetwork)
+	s.cfg.NetworkToggler.ToggleNetwork(req.BrokenNetwork)
+
+	return &ToggleNetworkResponse{}, nil
 }

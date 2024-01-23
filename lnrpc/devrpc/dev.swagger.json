@@ -54,6 +54,9 @@
     "devrpcImportGraphResponse": {
       "type": "object"
     },
+    "devrpcToggleNetworkResponse": {
+      "type": "object"
+    },
     "lnrpcChannelEdge": {
       "type": "object",
       "properties": {

@@ -30,7 +30,16 @@ service Dev {
     used for development.
     */
     rpc ImportGraph (lnrpc.ChannelGraph) returns (ImportGraphResponse);
+
+    rpc ToggleNetwork (ToggleNetworkRequest) returns (ToggleNetworkResponse);
 }
 
 message ImportGraphResponse {
+}
+
+message ToggleNetworkRequest {
+    bool broken_network = 1;
+}
+
+message ToggleNetworkResponse {
 }

@@ -769,6 +769,40 @@ func testFundingExpiryBlocksOnPending(ht *lntest.HarnessTest) {
 	ht.CloseChannel(alice, chanPoint)
 }
 
+func testDisconnectWhileChannelConfirmed(ht *lntest.HarnessTest) {
+	alice, bob := ht.Alice, ht.Bob
+
+	// Make sure Alice and Bob are connected.
+	ht.EnsureConnected(alice, bob)
+
+	// Create a new channel that requires 1 confs before it's considered
+	// open.
+	params := lntest.OpenChannelParams{
+		Amt: 100000,
+	}
+	update := ht.OpenChannelAssertPending(alice, bob, params)
+	chanPoint := lntest.ChanPointFromPendingUpdate(update)
+
+	broken := true
+	bob.RPC.ToggleNetwork(broken)
+
+	// Mine one block to confirm the funding transaction.
+	txids := ht.Miner.AssertNumTxsInMempool(1)
+	blocks := ht.Miner.MineBlocksSlow(1)
+	ht.Miner.AssertTxInBlock(blocks[0], txids[0])
+	bestBlock := blocks[len(blocks)-1]
+	ht.WaitForBlockchainSyncTo(alice, bestBlock)
+
+	broken = false
+	bob.RPC.ToggleNetwork(broken)
+	//ht.RestartNode(bob)
+	//ht.RestartNode(bob)
+
+	ht.WaitForBlockchainSyncTo(bob, bestBlock)
+
+	ht.CloseChannel(alice, chanPoint)
+}
+
 // testSimpleTaprootChannelActivation ensures that a simple taproot channel is
 // active if the initiator disconnects and reconnects in between channel opening
 // and channel confirmation.

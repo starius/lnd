@@ -42,6 +42,7 @@ import (
 	"github.com/lightningnetwork/lnd/macaroons"
 	"github.com/lightningnetwork/lnd/rpcperms"
 	"github.com/lightningnetwork/lnd/signal"
+	"github.com/lightningnetwork/lnd/testconn"
 	"github.com/lightningnetwork/lnd/walletunlocker"
 	"github.com/lightningnetwork/lnd/watchtower"
 	"github.com/lightningnetwork/lnd/watchtower/wtclient"
@@ -529,6 +530,11 @@ func (d *DefaultWalletImpl) BuildWalletConfig(ctx context.Context,
 		}
 	}
 
+	dial := d.cfg.net.Dial
+	if d.cfg.brokenNetwork != nil {
+		dial = testconn.WrapDial(dial, d.cfg.brokenNetwork.Load)
+	}
+
 	// With the information parsed from the configuration, create valid
 	// instances of the pertinent interfaces required to operate the
 	// Lightning Network Daemon.
@@ -548,7 +554,7 @@ func (d *DefaultWalletImpl) BuildWalletConfig(ctx context.Context,
 		ActiveNetParams:             d.cfg.ActiveNetParams,
 		FeeURL:                      d.cfg.FeeURL,
 		Dialer: func(addr string) (net.Conn, error) {
-			return d.cfg.net.Dial(
+			return dial(
 				"tcp", addr, d.cfg.ConnectionTimeout,
 			)
 		},
@@ -1322,6 +1328,11 @@ func initNeutrinoBackend(ctx context.Context, cfg *Config, chainDir string,
 		return nil, nil, err
 	}
 
+	dial := cfg.net.Dial
+	if cfg.brokenNetwork != nil {
+		dial = testconn.WrapDial(dial, cfg.brokenNetwork.Load)
+	}
+
 	// With the database open, we can now create an instance of the
 	// neutrino light client. We pass in relevant configuration parameters
 	// required.
@@ -1332,7 +1343,7 @@ func initNeutrinoBackend(ctx context.Context, cfg *Config, chainDir string,
 		AddPeers:     cfg.NeutrinoMode.AddPeers,
 		ConnectPeers: cfg.NeutrinoMode.ConnectPeers,
 		Dialer: func(addr net.Addr) (net.Conn, error) {
-			return cfg.net.Dial(
+			return dial(
 				addr.Network(), addr.String(),
 				cfg.ConnectionTimeout,
 			)

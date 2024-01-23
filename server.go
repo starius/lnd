@@ -66,6 +66,7 @@ import (
 	"github.com/lightningnetwork/lnd/routing/route"
 	"github.com/lightningnetwork/lnd/subscribe"
 	"github.com/lightningnetwork/lnd/sweep"
+	"github.com/lightningnetwork/lnd/testconn"
 	"github.com/lightningnetwork/lnd/ticker"
 	"github.com/lightningnetwork/lnd/tor"
 	"github.com/lightningnetwork/lnd/walletunlocker"
@@ -457,12 +458,12 @@ func parseAddr(address string, netCfg tor.Net) (net.Addr, error) {
 
 // noiseDial is a factory function which creates a connmgr compliant dialing
 // function by returning a closure which includes the server's identity key.
-func noiseDial(idKey keychain.SingleKeyECDH,
-	netCfg tor.Net, timeout time.Duration) func(net.Addr) (net.Conn, error) {
+func noiseDial(idKey keychain.SingleKeyECDH, dial tor.DialFunc,
+	timeout time.Duration) func(net.Addr) (net.Conn, error) {
 
 	return func(a net.Addr) (net.Conn, error) {
 		lnAddr := a.(*lnwire.NetAddress)
-		return brontide.Dial(idKey, lnAddr, timeout, netCfg.Dial)
+		return brontide.Dial(idKey, lnAddr, timeout, dial)
 	}
 }
 
@@ -487,13 +488,20 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		)
 	)
 
+	var brontideOpts []brontide.Option
+	if cfg.brokenNetwork != nil {
+		brontideOpts = append(brontideOpts,
+			brontide.WithBrokenNetwork(cfg.brokenNetwork.Load),
+		)
+	}
+
 	listeners := make([]net.Listener, len(listenAddrs))
 	for i, listenAddr := range listenAddrs {
 		// Note: though brontide.NewListener uses ResolveTCPAddr, it
 		// doesn't need to call the general lndResolveTCP function
 		// since we are resolving a local address.
 		listeners[i], err = brontide.NewListener(
-			nodeKeyECDH, listenAddr.String(),
+			nodeKeyECDH, listenAddr.String(), brontideOpts...,
 		)
 		if err != nil {
 			return nil, err
@@ -1630,6 +1638,11 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 	// Create liveness monitor.
 	s.createLivenessMonitor(cfg, cc)
 
+	dial := s.cfg.net.Dial
+	if s.cfg.brokenNetwork != nil {
+		dial = testconn.WrapDial(dial, s.cfg.brokenNetwork.Load)
+	}
+
 	// Create the connection manager which will be responsible for
 	// maintaining persistent outbound connections and also accepting new
 	// incoming connections
@@ -1639,7 +1652,7 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		RetryDuration:  time.Second * 5,
 		TargetOutbound: 100,
 		Dial: noiseDial(
-			nodeKeyECDH, s.cfg.net, s.cfg.ConnectionTimeout,
+			nodeKeyECDH, dial, s.cfg.ConnectionTimeout,
 		),
 		OnConnection: s.OutboundPeerConnected,
 	})
@@ -4415,9 +4428,12 @@ func (s *server) ConnectToPeer(addr *lnwire.NetAddress,
 func (s *server) connectToPeer(addr *lnwire.NetAddress,
 	errChan chan<- error, timeout time.Duration) {
 
-	conn, err := brontide.Dial(
-		s.identityECDH, addr, timeout, s.cfg.net.Dial,
-	)
+	dial := s.cfg.net.Dial
+	if s.cfg.brokenNetwork != nil {
+		dial = testconn.WrapDial(dial, s.cfg.brokenNetwork.Load)
+	}
+
+	conn, err := brontide.Dial(s.identityECDH, addr, timeout, dial)
 	if err != nil {
 		srvrLog.Errorf("Unable to connect to %v: %v", addr, err)
 		select {

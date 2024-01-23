@@ -23,6 +23,7 @@ type DevClient interface {
 	// ImportGraph imports a ChannelGraph into the graph database. Should only be
 	// used for development.
 	ImportGraph(ctx context.Context, in *lnrpc.ChannelGraph, opts ...grpc.CallOption) (*ImportGraphResponse, error)
+	ToggleNetwork(ctx context.Context, in *ToggleNetworkRequest, opts ...grpc.CallOption) (*ToggleNetworkResponse, error)
 }
 
 type devClient struct {
@@ -42,6 +43,15 @@ func (c *devClient) ImportGraph(ctx context.Context, in *lnrpc.ChannelGraph, opt
 	return out, nil
 }
 
+func (c *devClient) ToggleNetwork(ctx context.Context, in *ToggleNetworkRequest, opts ...grpc.CallOption) (*ToggleNetworkResponse, error) {
+	out := new(ToggleNetworkResponse)
+	err := c.cc.Invoke(ctx, "/devrpc.Dev/ToggleNetwork", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DevServer is the server API for Dev service.
 // All implementations must embed UnimplementedDevServer
 // for forward compatibility
@@ -50,6 +60,7 @@ type DevServer interface {
 	// ImportGraph imports a ChannelGraph into the graph database. Should only be
 	// used for development.
 	ImportGraph(context.Context, *lnrpc.ChannelGraph) (*ImportGraphResponse, error)
+	ToggleNetwork(context.Context, *ToggleNetworkRequest) (*ToggleNetworkResponse, error)
 	mustEmbedUnimplementedDevServer()
 }
 
@@ -59,6 +70,9 @@ type UnimplementedDevServer struct {
 
 func (UnimplementedDevServer) ImportGraph(context.Context, *lnrpc.ChannelGraph) (*ImportGraphResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ImportGraph not implemented")
+}
+func (UnimplementedDevServer) ToggleNetwork(context.Context, *ToggleNetworkRequest) (*ToggleNetworkResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ToggleNetwork not implemented")
 }
 func (UnimplementedDevServer) mustEmbedUnimplementedDevServer() {}
 
@@ -91,6 +105,24 @@ func _Dev_ImportGraph_Handler(srv interface{}, ctx context.Context, dec func(int
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Dev_ToggleNetwork_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ToggleNetworkRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DevServer).ToggleNetwork(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/devrpc.Dev/ToggleNetwork",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DevServer).ToggleNetwork(ctx, req.(*ToggleNetworkRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Dev_ServiceDesc is the grpc.ServiceDesc for Dev service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -101,6 +133,10 @@ var Dev_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ImportGraph",
 			Handler:    _Dev_ImportGraph_Handler,
+		},
+		{
+			MethodName: "ToggleNetwork",
+			Handler:    _Dev_ToggleNetwork_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

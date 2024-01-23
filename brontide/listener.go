@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/lightningnetwork/lnd/keychain"
+	"github.com/lightningnetwork/lnd/testconn"
 )
 
 // defaultHandshakes is the maximum number of handshakes that can be done in
@@ -27,15 +28,34 @@ type Listener struct {
 	handshakeSema chan struct{}
 	conns         chan maybeConn
 	quit          chan struct{}
+
+	brokenNetwork func() bool
 }
 
 // A compile-time assertion to ensure that Conn meets the net.Listener interface.
 var _ net.Listener = (*Listener)(nil)
 
+type Config struct {
+	brokenNetwork func() bool
+}
+
+type Option func(*Config)
+
+func WithBrokenNetwork(brokenNetwork func() bool) Option {
+	return func(c *Config) {
+		c.brokenNetwork = brokenNetwork
+	}
+}
+
 // NewListener returns a new net.Listener which enforces the Brontide scheme
 // during both initial connection establishment and data transfer.
 func NewListener(localStatic keychain.SingleKeyECDH,
-	listenAddr string) (*Listener, error) {
+	listenAddr string, opts ...Option) (*Listener, error) {
+
+	var config Config
+	for _, opt := range opts {
+		opt(&config)
+	}
 
 	addr, err := net.ResolveTCPAddr("tcp", listenAddr)
 	if err != nil {
@@ -53,6 +73,7 @@ func NewListener(localStatic keychain.SingleKeyECDH,
 		handshakeSema: make(chan struct{}, defaultHandshakes),
 		conns:         make(chan maybeConn),
 		quit:          make(chan struct{}),
+		brokenNetwork: config.brokenNetwork,
 	}
 
 	for i := 0; i < defaultHandshakes; i++ {
@@ -78,6 +99,13 @@ func (l *Listener) listen() {
 		}
 
 		conn, err := l.tcp.Accept()
+
+		if l.brokenNetwork != nil {
+			conn, err = testconn.PostAccept(
+				conn, err, l.brokenNetwork,
+			)
+		}
+
 		if err != nil {
 			l.rejectConn(err)
 			l.handshakeSema <- struct{}{}

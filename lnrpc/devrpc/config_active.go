@@ -8,6 +8,10 @@ import (
 	"github.com/lightningnetwork/lnd/channeldb"
 )
 
+type NetworkToggler interface {
+	ToggleNetwork(broken bool)
+}
+
 // Config is the primary configuration struct for the DEV RPC server. It
 // contains all the items required for the rpc server to carry out its
 // duties. Any fields with struct tags are meant to be parsed as normal
@@ -16,4 +20,5 @@ import (
 type Config struct {
 	ActiveNetParams *chaincfg.Params
 	GraphDB         *channeldb.ChannelGraph
+	NetworkToggler  NetworkToggler
 }
