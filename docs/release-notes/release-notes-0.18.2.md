@@ -51,6 +51,14 @@
 
 # Improvements
 ## Functional Updates
+
+* lnd gets new flag [`--channelbackuponshutdown`][close]. Pass the option to
+  make LND update channel.backup at shutdown time in addition to regular
+  updates, e.g. upon channel openings.
+
+* The SCB file now [contains more data][close] that enable a last resort rescue
+  for certain cases where the peer is no longer around.
+
 ## RPC Updates
 
 * [`xImportMissionControl`](https://github.com/lightningnetwork/lnd/pull/8779) 
@@ -63,7 +71,7 @@
 
 * [`importmc`](https://github.com/lightningnetwork/lnd/pull/8779) now accepts
   `0` failure amounts.
- 
+
 * [`getchaninfo`](https://github.com/lightningnetwork/lnd/pull/8813) now accepts
   a channel outpoint besides a channel id.
 
@@ -101,8 +109,11 @@
 # Contributors (Alphabetical Order)
 
 * Andras Banki-Horvath
+* Boris Nagaev
 * Bufo
 * Elle Mouton
 * Matheus Degiovani
 * Oliver Gugger
 * Slyghtning
+
+[close]: https://github.com/lightningnetwork/lnd/pull/8183
