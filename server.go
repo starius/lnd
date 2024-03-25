@@ -1506,13 +1506,14 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 	}
 	backupFile := chanbackup.NewMultiFile(cfg.BackupFilePath)
 	startingChans, err := chanbackup.FetchStaticChanBackups(
-		s.chanStateDB, s.addrSource,
+		s.chanStateDB, s.addrSource, chanbackup.WithCloseTxInputs(),
 	)
 	if err != nil {
 		return nil, err
 	}
 	s.chanSubSwapper, err = chanbackup.NewSubSwapper(
 		startingChans, chanNotifier, s.cc.KeyRing, backupFile,
+		chanbackup.WithCloseTxInputs(),
 	)
 	if err != nil {
 		return nil, err
@@ -2307,6 +2308,25 @@ func (s *server) Stop() error {
 		if err := s.htlcNotifier.Stop(); err != nil {
 			srvrLog.Warnf("failed to stop htlcNotifier: %v", err)
 		}
+
+		// Update channel.backup file. Make sure to do it before
+		// stopping chanSubSwapper.
+		singles, err := chanbackup.FetchStaticChanBackups(
+			s.chanStateDB, s.addrSource,
+			chanbackup.WithCloseTxInputs(),
+		)
+		if err != nil {
+			srvrLog.Warnf("failed to fetch channel states: %v",
+				err)
+		} else {
+			const wait = true
+			err := s.chanSubSwapper.ManualUpdate(singles, wait)
+			if err != nil {
+				srvrLog.Warnf("Manual update of channel "+
+					"backup failed: %v.", err)
+			}
+		}
+
 		if err := s.chanSubSwapper.Stop(); err != nil {
 			srvrLog.Warnf("failed to stop chanSubSwapper: %v", err)
 		}
