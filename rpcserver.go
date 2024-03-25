@@ -7621,6 +7621,7 @@ func (r *rpcServer) ExportChannelBackup(ctx context.Context,
 	// unknown, then we'll return an error
 	unpackedBackup, err := chanbackup.FetchBackupForChan(
 		chanPoint, r.server.chanStateDB, r.server.addrSource,
+		chanbackup.WithCloseTxInputs(),
 	)
 	if err != nil {
 		return nil, err
@@ -7791,6 +7792,7 @@ func (r *rpcServer) ExportAllChannelBackups(ctx context.Context,
 	// channels from disk.
 	allUnpackedBackups, err := chanbackup.FetchStaticChanBackups(
 		r.server.chanStateDB, r.server.addrSource,
+		chanbackup.WithCloseTxInputs(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("unable to fetch all static chan "+
@@ -7920,6 +7922,7 @@ func (r *rpcServer) SubscribeChannelBackups(req *lnrpc.ChannelBackupSubscription
 			// backups from disk.
 			chanBackups, err := chanbackup.FetchStaticChanBackups(
 				r.server.chanStateDB, r.server.addrSource,
+				chanbackup.WithCloseTxInputs(),
 			)
 			if err != nil {
 				return fmt.Errorf("unable to fetch all "+
