@@ -1,6 +1,7 @@
 package itest
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -12,9 +13,12 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcd/btcutil"
+	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/lightningnetwork/lnd/aezeed"
 	"github.com/lightningnetwork/lnd/chanbackup"
 	"github.com/lightningnetwork/lnd/funding"
+	"github.com/lightningnetwork/lnd/input"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/walletrpc"
 	"github.com/lightningnetwork/lnd/lntest"
@@ -50,6 +54,10 @@ type chanRestoreScenario struct {
 	password []byte
 	mnemonic []string
 	params   lntest.OpenChannelParams
+
+	forceCloseTx                 *wire.MsgTx
+	startCarolAfterMiningCloseTx bool
+	useOutdatedScbToClose        bool
 }
 
 // newChanRestoreScenario creates a new scenario that has two nodes, Carol and
@@ -161,6 +169,11 @@ func (c *chanRestoreScenario) restoreDave(ht *lntest.HarnessTest,
 //  4. validate pending channel state and check we cannot force close it.
 //  5. validate Carol's UTXOs.
 //  6. assert DLP is executed.
+//
+// If forceCloseTx is provided, Carol is not restarted and that transaction is
+// broadcasted instead. This is needed to test scbforceclose.
+// If useOutdatedScbToClose, expect Carol to penalize Dave for publishing an
+// outdated force close transaction.
 func (c *chanRestoreScenario) testScenario(ht *lntest.HarnessTest,
 	restoredNodeFunc nodeRestorer) {
 
@@ -214,24 +227,55 @@ func (c *chanRestoreScenario) testScenario(ht *lntest.HarnessTest,
 	// be cpfp'ed in case of anchor commitments.
 	ht.SetFeeEstimate(30000)
 
-	// Now that we have ensured that the channels restored by the backup
-	// are in the correct state even without the remote peer telling us so,
-	// let's start up Carol again.
-	require.NoError(ht, restartCarol(), "restart carol failed")
+	scbforceclose := false
+	var startCarol func() error
+	if c.forceCloseTx != nil {
+		// Broadcast force close transaction coming from SCB.
+		const allowHighFees = true
+		_, err := ht.Miner.Client.SendRawTransaction(
+			c.forceCloseTx, allowHighFees,
+		)
+		require.NoError(ht, err)
 
-	if lntest.CommitTypeHasAnchors(c.params.CommitmentType) {
-		ht.AssertNumUTXOs(carol, 2)
+		if c.startCarolAfterMiningCloseTx {
+			// Start Carol inside assertFundsRecovered after mining
+			// close tx.
+			startCarol = restartCarol
+		} else {
+			// Don't restart Carol at all.
+			carol = nil
+		}
+
+		scbforceclose = true
 	} else {
-		ht.AssertNumUTXOs(carol, 1)
+		// Now that we have ensured that the channels restored by the
+		// backup are in the correct state even without the remote peer
+		// telling us so, let's start up Carol again.
+		require.NoError(ht, restartCarol(), "restart carol failed")
+
+		if lntest.CommitTypeHasAnchors(c.params.CommitmentType) {
+			ht.AssertNumUTXOs(carol, 2)
+		} else {
+			ht.AssertNumUTXOs(carol, 1)
+		}
 	}
 
-	// Now we'll assert that both sides properly execute the DLP protocol.
-	// We grab their balances now to ensure that they're made whole at the
-	// end of the protocol.
-	assertDLPExecuted(
-		ht, carol, carolStartingBalance, dave,
-		daveStartingBalance, c.params.CommitmentType,
-	)
+	if c.useOutdatedScbToClose {
+		// Expect Carol to penalize Dave.
+		assertPenalty(
+			ht, carol, carolStartingBalance, dave,
+			daveStartingBalance, startCarol,
+		)
+	} else {
+		// Now we'll assert that both sides properly execute the DLP
+		// protocol. We grab their balances now to ensure that they're
+		// made whole at the end of the protocol.
+		assertFundsRecovered(
+			ht, carol, carolStartingBalance, dave,
+			daveStartingBalance, c.params.CommitmentType,
+			scbforceclose, startCarol,
+		)
+	}
 }
 
 // testChannelBackupRestore tests that we're able to recover from, and initiate
@@ -600,6 +644,57 @@ func testChannelBackupRestoreCommitTypes(ht *lntest.HarnessTest) {
 		if !success {
 			break
 		}
+
+		// Test scbforceclose scenario: generate force close tx
+		// from SCB, Carol is offline forever.
+		success = ht.Run("scbforceclose_no_carol/"+tc.name,
+			func(t *testing.T) {
+				h := ht.Subtest(t)
+
+				runScbForceCloseCommitTypes(
+					h, tc.ct, tc.zeroConf, false, false,
+				)
+			})
+		if !success {
+			break
+		}
+
+		// Test scbforceclose scenario when Carol wakes up after our
+		// force close tx is mined. Make sure she can not make a penalty
+		// transaction.
+		success = ht.Run("scbforceclose_carol_wakes_up/"+tc.name,
+			func(t *testing.T) {
+				h := ht.Subtest(t)
+
+				startCarolAfterMiningCloseTx := true
+				runScbForceCloseCommitTypes(
+					h, tc.ct, tc.zeroConf,
+					startCarolAfterMiningCloseTx, false,
+				)
+			})
+		if !success {
+			break
+		}
+
+		// Control for the previous case: make sure that Carol can
+		// produce a penalty transaction is needed. To do it, use an
+		// outdated SCB for scbforceclose and wake up Carol after mining
+		// the force close transaction, like in the previous case.
+		success = ht.Run("scbforceclose_carol_penalizes/"+tc.name,
+			func(t *testing.T) {
+				h := ht.Subtest(t)
+
+				startCarolAfterMiningCloseTx := true
+				useOutdatedScbToClose := true
+				runScbForceCloseCommitTypes(
+					h, tc.ct, tc.zeroConf,
+					startCarolAfterMiningCloseTx,
+					useOutdatedScbToClose,
+				)
+			})
+		if !success {
+			break
+		}
 	}
 }
 
@@ -659,6 +754,168 @@ func runChanRestoreScenarioCommitTypes(ht *lntest.HarnessTest,
 	// that we'll restore using the on-disk channels.backup.
 	restoredNodeFunc := chanRestoreViaRPC(
 		ht, crs.password, crs.mnemonic, multi, dave,
+	)
+
+	// Test the scenario.
+	crs.testScenario(ht, restoredNodeFunc)
+}
+
+// runScbForceCloseCommitTypes tests that SCB file is updated on LND
+// shutdown, shuts down another mode, restores the node using SCB, signs and
+// broadcasts the force close transaction produced from SCB, continues recovery
+// without another node until funds are recovered.
+func runScbForceCloseCommitTypes(ht *lntest.HarnessTest,
+	ct lnrpc.CommitmentType, zeroConf, startCarolAfterMiningCloseTx,
+	useOutdatedScbToClose bool) {
+
+	// Create a new restore scenario.
+	crs := newChanRestoreScenario(ht, ct, zeroConf)
+	crs.startCarolAfterMiningCloseTx = startCarolAfterMiningCloseTx
+	crs.useOutdatedScbToClose = useOutdatedScbToClose
+	carol, dave := crs.carol, crs.dave
+
+	// If we are testing zero-conf channels, setup a ChannelAcceptor for
+	// the fundee.
+	var cancelAcceptor context.CancelFunc
+	if zeroConf {
+		// Setup a ChannelAcceptor.
+		acceptStream, cancel := carol.RPC.ChannelAcceptor()
+		cancelAcceptor = cancel
+		go acceptChannel(ht.T, true, acceptStream)
+	}
+
+	var fundingShim *lnrpc.FundingShim
+	if ct == lnrpc.CommitmentType_SCRIPT_ENFORCED_LEASE {
+		_, minerHeight := ht.Miner.GetBestBlock()
+		thawHeight := uint32(minerHeight + thawHeightDelta)
+
+		fundingShim, _ = deriveFundingShim(
+			ht, dave, carol, crs.params.Amt, thawHeight, true, ct,
+		)
+		crs.params.FundingShim = fundingShim
+	}
+	ht.OpenChannel(dave, carol, crs.params)
+
+	// Remove the ChannelAcceptor.
+	if zeroConf {
+		cancelAcceptor()
+	}
+
+	// Cache file path to channel.backup file.
+	backupFilePath := dave.Cfg.ChanBackupPath()
+
+	// If this was a zero conf taproot channel, then since it's private,
+	// we'll need to mine an extra block (framework won't mine extra blocks
+	// otherwise).
+	if ct == lnrpc.CommitmentType_SIMPLE_TAPROOT && zeroConf {
+		ht.MineBlocksAndAssertNumTxes(1, 1)
+	}
+
+	// Create extended key to work with SCB internals.
+	var seedMnemonic aezeed.Mnemonic
+	copy(seedMnemonic[:], crs.mnemonic)
+	cipherSeed, err := seedMnemonic.ToCipherSeed(crs.password)
+	require.NoError(ht, err)
+	extendedRootKey, err := hdkeychain.NewMaster(
+		cipherSeed.Entropy[:], dave.Cfg.NetParams,
+	)
+	require.NoError(ht, err)
+
+	// Create keyRing.
+	keyRing := &hdKeyRing{
+		ExtendedKey: extendedRootKey,
+		ChainParams: dave.Cfg.NetParams,
+	}
+
+	// Create signer.
+	signer := &hdSigner{
+		ExtendedKey: extendedRootKey,
+		ChainParams: dave.Cfg.NetParams,
+	}
+	signer.MusigSessionManager = input.NewMusigSessionManager(
+		signer.FetchPrivateKey,
+	)
+
+	// readBackup reads, decrypts and parses backup file. It also returns
+	// raw bytes of channel.backup file.
+	readBackup := func() (chanbackup.Single, []byte) {
+		// Read the entire Multi backup stored within this node's
+		// channels.backup file.
+		multi, err := os.ReadFile(backupFilePath)
+		require.NoError(ht, err)
+
+		// Decrypt and parse the file.
+		var m chanbackup.Multi
+		err = m.UnpackFromReader(bytes.NewReader(multi), keyRing)
+		require.NoError(ht, err)
+		require.Equal(ht, 1, len(m.StaticBackups))
+		single := m.StaticBackups[0]
+		require.NotNil(ht, single.CloseTxInputs)
+		require.NotNil(ht, single.CloseTxInputs.CommitTx)
+		require.NotEmpty(ht, single.CloseTxInputs.CommitSig)
+		return single, multi
+	}
+
+	// outputsAsString formats values of transaction outputs as a comma
+	// separated string.
+	outputsAsString := func(tx *wire.MsgTx) string {
+		outputs := make([]string, 0, len(tx.TxOut))
+		for _, txOut := range tx.TxOut {
+			value := txOut.Value
+			outputs = append(outputs, fmt.Sprintf("%d", value))
+		}
+		return strings.Join(outputs, ",")
+	}
+
+	// Make sure the nodes are connected for the payment to pass.
+	ht.EnsureConnected(carol, dave)
+
+	// Send some sats from Dave to Carol. The channel state will change,
+	// but not in the backup.
+	payReqs, _, _ := ht.CreatePayReqs(carol, 100_000, 1)
+	ht.CompletePaymentRequests(dave, payReqs)
+
+	// Snapshot channel backup state before Dave's shutdown.
+	backupBeforeShutdown, _ := readBackup()
+	balancesBeforeShutdown := outputsAsString(
+		backupBeforeShutdown.CloseTxInputs.CommitTx,
+	)
+
+	// Now shutdown Dave. It should update the backup file upon shutdown.
+	// Use method SuspendNode() instead of Shutdown() to prevent node's
+	// directory from being cleaned up, so we can read channel.backup.
+	ht.SuspendNode(dave)
+
+	// Snapshot channel backup state after Dave's shutdown.
+	backupAfterShutdown, multiAfterShutdown := readBackup()
+	balancesAfterShutdown := outputsAsString(
+		backupAfterShutdown.CloseTxInputs.CommitTx,
+	)
+
+	// Make sure balances in the backup changed during shutdown.
+	require.NotEqual(ht, balancesBeforeShutdown, balancesAfterShutdown)
+
+	// Generate force close transaction from SCB to use it to restore.
+	var scbForCloseTx chanbackup.Single
+	if useOutdatedScbToClose {
+		// Intentionally use an outdated SCB to test Carol's penalty.
+		scbForCloseTx = backupBeforeShutdown
+	} else {
+		// Use the latest SCB to produce force close tx.
+		scbForCloseTx = backupAfterShutdown
+	}
+	crs.forceCloseTx, err = chanbackup.SignCloseTx(
+		scbForCloseTx, keyRing, signer, signer,
+	)
+	require.NoError(ht, err)
+
+	// Start Dave again, because testScenario expects it to be up.
+	ht.RestartNode(dave)
+
+	// Now that we have Dave's backup file, we'll create a new nodeRestorer
+	// that we'll restore using the on-disk channels.backup.
+	restoredNodeFunc := chanRestoreViaRPC(
+		ht, crs.password, crs.mnemonic, multiAfterShutdown, dave,
 	)
 
 	// Test the scenario.
@@ -1232,9 +1489,10 @@ func testDataLossProtection(ht *lntest.HarnessTest) {
 
 	// Assert that once Dave comes up, they reconnect, Carol force closes
 	// on chain, and both of them properly carry out the DLP protocol.
-	assertDLPExecuted(
+	assertFundsRecovered(
 		ht, carol, carolStartingBalance, dave,
 		daveStartingBalance, lnrpc.CommitmentType_STATIC_REMOTE_KEY,
+		false, nil,
 	)
 
 	// As a second part of this test, we will test the scenario where a
@@ -1487,15 +1745,18 @@ func assertTimeLockSwept(ht *lntest.HarnessTest, carol, dave *node.HarnessNode,
 	ht.AssertNodeNumChannels(carol, 0)
 }
 
-// assertDLPExecuted asserts that Dave is a node that has recovered their state
-// form scratch. Carol should then force close on chain, with Dave sweeping his
-// funds immediately, and Carol sweeping her fund after her CSV delay is up. If
-// the blankSlate value is true, then this means that Dave won't need to sweep
-// on chain as he has no funds in the channel.
-func assertDLPExecuted(ht *lntest.HarnessTest,
+// assertFundsRecovered asserts that Dave is a node that has recovered their
+// state form scratch. Carol should then force close on chain, with Dave
+// sweeping his funds immediately, and Carol sweeping her fund after her CSV
+// delay is up. If carol is nil, she is not checked. If force close transaction
+// was produced from SCB, scbforceclose is true. If startCarol is passed, it
+// means that Carol is suspended and it should be started after closing tx is
+// mined.
+func assertFundsRecovered(ht *lntest.HarnessTest,
 	carol *node.HarnessNode, carolStartingBalance int64,
 	dave *node.HarnessNode, daveStartingBalance int64,
-	commitType lnrpc.CommitmentType) {
+	commitType lnrpc.CommitmentType, scbforceclose bool,
+	startCarol func() error) {
 
 	ht.Helper()
 
@@ -1503,18 +1764,23 @@ func assertDLPExecuted(ht *lntest.HarnessTest,
 	// be cpfp'ed.
 	ht.SetFeeEstimate(30000)
 
-	// We disabled auto-reconnect for some tests to avoid timing issues.
-	// To make sure the nodes are initiating DLP now, we have to manually
-	// re-connect them.
-	ht.EnsureConnected(carol, dave)
+	if carol != nil && startCarol == nil {
+		// We disabled auto-reconnect for some tests to avoid timing
+		// issues. To make sure the nodes are initiating DLP now, we
+		// have to manually re-connect them.
+		ht.EnsureConnected(carol, dave)
+	}
 
 	// Upon reconnection, the nodes should detect that Dave is out of sync.
 	// Carol should force close the channel using her latest commitment.
+	// For scbforceclose case: we detect the manually broadcasts Dave's tx.
 	ht.Miner.AssertNumTxsInMempool(1)
 
-	// Channel should be in the state "waiting close" for Carol since she
-	// broadcasted the force close tx.
-	ht.AssertNumWaitingClose(carol, 1)
+	if carol != nil && startCarol == nil {
+		// Channel should be in the state "waiting close" for Carol
+		// since she broadcasted the force close tx.
+		ht.AssertNumWaitingClose(carol, 1)
+	}
 
 	// Dave should also consider the channel "waiting close", as he noticed
 	// the channel was out of sync, and is now waiting for a force close to
@@ -1529,13 +1795,22 @@ func assertDLPExecuted(ht *lntest.HarnessTest,
 	ht.MineBlocksAndAssertNumTxes(1, 1)
 	blocksMined := uint32(1)
 
+	// Start Carol after mining closing tx if requested. It is done here to
+	// ensure that she does not publish her version of force close tx.
+	if startCarol != nil {
+		startCarol()
+		ht.EnsureConnected(carol, dave)
+	}
+
 	// Dave should consider the channel pending force close (since he is
 	// waiting for his sweep to confirm).
 	ht.AssertNumPendingForceClose(dave, 1)
 
-	// Carol is considering it "pending force close", as we must wait
-	// before she can sweep her outputs.
-	ht.AssertNumPendingForceClose(carol, 1)
+	if carol != nil {
+		// Carol is considering it "pending force close", as we must
+		// wait before she can sweep her outputs.
+		ht.AssertNumPendingForceClose(carol, 1)
+	}
 
 	if commitType == lnrpc.CommitmentType_SCRIPT_ENFORCED_LEASE {
 		// Dave should sweep his anchor only, since he still has the
@@ -1546,7 +1821,14 @@ func assertDLPExecuted(ht *lntest.HarnessTest,
 		// Note that they cannot sweep them as these anchor sweepings
 		// are uneconomical.
 		ht.AssertNumPendingSweeps(dave, 1)
-		ht.AssertNumPendingSweeps(carol, 1)
+		if carol != nil {
+			if scbforceclose {
+				// In scbforceclose Carol has two sweeps.
+				ht.AssertNumPendingSweeps(carol, 2)
+			} else {
+				ht.AssertNumPendingSweeps(carol, 1)
+			}
+		}
 
 		// After Carol's output matures, she should also reclaim her
 		// funds.
@@ -1558,14 +1840,17 @@ func assertDLPExecuted(ht *lntest.HarnessTest,
 
 		// Carol should have two sweep requests - one for her commit
 		// output and the other for her anchor.
-		ht.AssertNumPendingSweeps(carol, 2)
+		if carol != nil {
+			ht.AssertNumPendingSweeps(carol, 2)
 
-		// Mine a block to trigger the sweep.
-		ht.MineEmptyBlocks(1)
-		ht.MineBlocksAndAssertNumTxes(1, 1)
+			// Mine a block to trigger the sweep in Carol.
+			ht.MineEmptyBlocks(1)
+			ht.MineBlocksAndAssertNumTxes(1, 1)
 
-		// Now the channel should be fully closed also from Carol's POV.
-		ht.AssertNumPendingForceClose(carol, 0)
+			// Now the channel should be fully closed also from
+			// Carol's POV.
+			ht.AssertNumPendingForceClose(carol, 0)
+		}
 
 		// We'll now mine the remaining blocks to prompt Dave to sweep
 		// his CLTV-constrained output.
@@ -1589,9 +1874,12 @@ func assertDLPExecuted(ht *lntest.HarnessTest,
 	} else {
 		// Dave should sweep his funds immediately, as they are not
 		// timelocked. We also expect Carol and Dave sweep their
-		// anchors if it's an anchor channel.
-		if lntest.CommitTypeHasAnchors(commitType) {
-			ht.AssertNumPendingSweeps(carol, 1)
+		// anchors if it's an anchor channel. If scbforceclose was used,
+		// the funds are timelocked, so expect just one sweep.
+		if lntest.CommitTypeHasAnchors(commitType) && !scbforceclose {
+			if carol != nil {
+				ht.AssertNumPendingSweeps(carol, 1)
+			}
 			ht.AssertNumPendingSweeps(dave, 2)
 		} else {
 			ht.AssertNumPendingSweeps(dave, 1)
@@ -1601,17 +1889,28 @@ func assertDLPExecuted(ht *lntest.HarnessTest,
 		ht.MineEmptyBlocks(1)
 		blocksMined++
 
-		// Expect one tx - the commitment sweep from Dave. For anchor
-		// channels, we expect the two anchor sweeping txns to be
-		// failed due they are uneconomical.
-		ht.MineBlocksAndAssertNumTxes(1, 1)
-		blocksMined++
+		if !scbforceclose {
+			// Expect one tx - the commitment sweep from Dave. For
+			// anchor channels, we expect the two anchor sweeping
+			// txns to be failed due they are uneconomical.
+			ht.MineBlocksAndAssertNumTxes(1, 1)
+			blocksMined++
 
-		// Now Dave should consider the channel fully closed.
-		ht.AssertNumPendingForceClose(dave, 0)
+			// Now Dave should consider the channel fully closed.
+			ht.AssertNumPendingForceClose(dave, 0)
+		} else if carol != nil {
+			// Expect one tx - the commitment sweep from Carol. For
+			// anchor channels, we expect the two anchor sweeping
+			// txns to be failed due they are uneconomical.
+			ht.MineBlocksAndAssertNumTxes(1, 1)
+			blocksMined++
 
-		// After Carol's output matures, she should also reclaim her
-		// funds.
+			// Now Carol should consider the channel fully closed.
+			ht.AssertNumPendingForceClose(carol, 0)
+		}
+
+		// After the remaining output matures, the waiting party should
+		// also reclaim her funds.
 		//
 		// The commit sweep resolver publishes the sweep tx at
 		// defaultCSV-1 and we already have blocks mined after the
@@ -1621,21 +1920,37 @@ func assertDLPExecuted(ht *lntest.HarnessTest,
 		// Mine one block to trigger the sweeper to sweep.
 		ht.MineEmptyBlocks(1)
 
-		// Carol should have two pending sweeps:
-		// 1. her commit output.
-		// 2. her anchor output, if this is anchor channel.
-		if lntest.CommitTypeHasAnchors(commitType) {
-			ht.AssertNumPendingSweeps(carol, 2)
-		} else {
-			ht.AssertNumPendingSweeps(carol, 1)
+		if scbforceclose {
+			// Dave's sweeper swept the outputs of force close tx.
+			if lntest.CommitTypeHasAnchors(commitType) {
+				ht.AssertNumPendingSweeps(dave, 2)
+			} else {
+				ht.AssertNumPendingSweeps(dave, 1)
+			}
+		} else if carol != nil {
+			// Carol should have two pending sweeps:
+			// 1. her commit output.
+			// 2. her anchor output, if this is anchor channel.
+			if lntest.CommitTypeHasAnchors(commitType) {
+				ht.AssertNumPendingSweeps(carol, 2)
+			} else {
+				ht.AssertNumPendingSweeps(carol, 1)
+			}
 		}
 
 		// Assert the sweeping tx is mined.
 		ht.MineBlocksAndAssertNumTxes(1, 1)
 
-		// Now the channel should be fully closed also from Carol's
-		// POV.
-		ht.AssertNumPendingForceClose(carol, 0)
+		if scbforceclose {
+			// Funds are now in Dave's wallet.
+			ht.AssertNumPendingForceClose(dave, 0)
+		}
+
+		if carol != nil {
+			// Now the channel should be fully closed also from
+			// Carol's POV.
+			ht.AssertNumPendingForceClose(carol, 0)
+		}
 	}
 
 	// We query Dave's balance to make sure it increased after the channel
@@ -1645,6 +1960,13 @@ func assertDLPExecuted(ht *lntest.HarnessTest,
 	daveBalance := daveBalResp.ConfirmedBalance
 	require.Greater(ht, daveBalance, daveStartingBalance,
 		"balance not increased")
+
+	ht.AssertNodeNumChannels(dave, 0)
+
+	if carol == nil {
+		// The following checks are for Carol only.
+		return
+	}
 
 	// Make sure Carol got her balance back.
 	err := wait.NoError(func() error {
@@ -1670,6 +1992,85 @@ func assertDLPExecuted(ht *lntest.HarnessTest,
 	}, defaultTimeout)
 	require.NoError(ht, err, "timeout while checking carol's balance")
 
-	ht.AssertNodeNumChannels(dave, 0)
+	ht.AssertNodeNumChannels(carol, 0)
+}
+
+// assertPenalty asserts that Carol penalized Dave for using an outdated
+// force close transaction.
+func assertPenalty(ht *lntest.HarnessTest,
+	carol *node.HarnessNode, carolStartingBalance int64,
+	dave *node.HarnessNode, daveStartingBalance int64,
+	startCarol func() error) {
+
+	ht.Helper()
+
+	// Detect manually broadcasted Dave's force close tx.
+	ht.Miner.AssertNumTxsInMempool(1)
+
+	// Dave should consider the channel "waiting close", as he noticed the
+	// channel was out of sync, and is now waiting for a force close to hit
+	// the chain.
+	ht.AssertNumWaitingClose(dave, 1)
+
+	// Restart Dave to make sure he is able to sweep the funds after
+	// shutdown.
+	ht.RestartNode(dave)
+
+	// Generate a single block, which should confirm the closing tx.
+	ht.MineBlocksAndAssertNumTxes(1, 1)
+
+	// Start Carol after mining closing tx if requested. It is done here to
+	// ensure that she does not publish her version of force close tx.
+	startCarol()
+	ht.EnsureConnected(carol, dave)
+
+	// Now Carol should publish a penalty transaction, collecting the whole
+	// channel balance.
+	ht.MineBlocksAndAssertNumTxes(1, 1)
+
+	// Ensure that Carol has a breach channel.
+	carolClosed := carol.RPC.ClosedChannels(&lnrpc.ClosedChannelsRequest{
+		Breach: true,
+	})
+	require.Equal(ht, 1, len(carolClosed.Channels))
+	require.Equal(
+		ht, lnrpc.ChannelCloseSummary_BREACH_CLOSE,
+		carolClosed.Channels[0].CloseType,
+	)
+
+	// We query Dave's balance to make sure it didn't increase after the
+	// channel closed. Carol collected all the funds.
+	daveBalResp := dave.RPC.WalletBalance()
+	daveBalance := daveBalResp.ConfirmedBalance
+	require.Equal(ht, daveStartingBalance, daveBalance)
+
+	// Make sure Carol's balance increased.
+	err := wait.NoError(func() error {
+		carolBalResp := carol.RPC.WalletBalance()
+		carolBalance := carolBalResp.ConfirmedBalance
+
+		// With Neutrino we don't get a backend error when trying to
+		// publish an orphan TX (which is what the sweep for the remote
+		// anchor is since the remote commitment TX was not broadcast).
+		// That's why the wallet still sees that as unconfirmed and we
+		// need to count the total balance instead of the confirmed.
+		if ht.IsNeutrinoBackend() {
+			carolBalance = carolBalResp.TotalBalance
+		}
+
+		increase := carolBalance - carolStartingBalance
+
+		// Expect the balance to rise at least by 900k sats.
+		const wantIncrease = 900_000
+		if increase < wantIncrease {
+			return fmt.Errorf("expected carol to have her balance "+
+				"increased by %d, instead had %d",
+				wantIncrease, increase)
+		}
+
+		return nil
+	}, defaultTimeout)
+	require.NoError(ht, err, "timeout while checking carol's balance")
+
 	ht.AssertNodeNumChannels(carol, 0)
 }
