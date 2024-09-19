@@ -1,7 +1,5 @@
 package fn
 
-import "testing"
-
 // Option[A] represents a value which may or may not be there. This is very
 // often preferable to nil-able pointers.
 type Option[A any] struct {
@@ -56,9 +54,22 @@ func (o Option[A]) UnwrapOrFunc(f func() A) A {
 	return ElimOption(o, f, func(a A) A { return a })
 }
 
+// Testing is a type passed to Test functions to manage test state. It has a
+// subset of testing.T methods needed by Option.UnwrapOrFail and
+// Result.UnwrapOrFail.
+type Testing interface {
+	// Helper marks the calling function as a test helper function.
+	Helper()
+
+	// Fatalf formats its arguments according to the format, analogous to
+	// Printf, and records the text in the error log, then marks the
+	// function as having failed and stops its execution.
+	Fatalf(format string, args ...any)
+}
+
 // UnwrapOrFail is used to extract a value from an option within a test
 // context. If the option is None, then the test fails.
-func (o Option[A]) UnwrapOrFail(t *testing.T) A {
+func (o Option[A]) UnwrapOrFail(t Testing) A {
 	t.Helper()
 
 	if o.isSome {

@@ -2,7 +2,6 @@ package fn
 
 import (
 	"fmt"
-	"testing"
 )
 
 // Result represents a value that can either be a success (T) or an error.
@@ -111,7 +110,7 @@ func (r Result[T]) UnwrapOrElse(f func() T) T {
 }
 
 // UnwrapOrFail returns the success value or fails the test if it's an error.
-func (r Result[T]) UnwrapOrFail(t *testing.T) T {
+func (r Result[T]) UnwrapOrFail(t Testing) T {
 	t.Helper()
 
 	if r.IsErr() {
