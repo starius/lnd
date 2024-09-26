@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
+	"sync"
 	"io"
 	mrand "math/rand"
 	"reflect"
@@ -3178,6 +3179,54 @@ func TestSwitchGetAttemptResult(t *testing.T) {
 	case <-time.After(1 * time.Second):
 		t.Fatalf("result not received")
 	}
+}
+
+func TestSwitchGetAttemptResultStress(t *testing.T) {
+	t.Parallel()
+
+	const paymentID = 123
+	var preimg lntypes.Preimage
+	preimg[0] = 3
+
+	s, err := initSwitchWithTempDB(t, testStartingHeight)
+	require.NoError(t, err, "unable to init switch")
+	if err := s.Start(); err != nil {
+		t.Fatalf("unable to start switch: %v", err)
+	}
+	defer s.Stop()
+
+	lookup := make(chan *PaymentCircuit, 1)
+	s.circuits = &mockCircuitMap{
+		lookup: lookup,
+	}
+
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		for _ = range 1000 {
+			// Next let the lookup find the circuit in the circuit map. It should
+			// subscribe to payment results, and return the result when available.
+			lookup <- &PaymentCircuit{}
+			_, err := s.GetAttemptResult(
+				paymentID, lntypes.Hash{}, newMockDeobfuscator(),
+			)
+			require.NoError(t, err, "unable to get payment result")
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		time.Sleep(10 * time.Millisecond)
+
+		s.Stop()
+	}()
+
+	wg.Wait()
 }
 
 // TestInvalidFailure tests that the switch returns an unreadable failure error
