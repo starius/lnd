@@ -209,4 +209,7 @@ replace google.golang.org/protobuf => github.com/lightninglabs/protobuf-go-hex-d
 // docs/INSTALL.md and GO_IMAGE in lnrpc/gen_protos_docker.sh.
 go 1.22.6
 
+// TODO(Boris): remove this before the PR gets merged.
+replace github.com/lightningnetwork/lnd/fn => github.com/starius/lnd/fn v0.0.0-20240927190949-74b59e24cc44
+
 retract v0.0.2
