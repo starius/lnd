@@ -1,6 +1,7 @@
 package sweep
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"sync"
@@ -129,12 +130,29 @@ type BumpRequest struct {
 // compares it with the specified MaxFeeRate, and returns the smaller of the
 // two.
 func (r *BumpRequest) MaxFeeRateAllowed() (chainfee.SatPerKWeight, error) {
+	// We'll want to know if we have any blobs, as we need to factor this
+	// into the max fee rate for this bump request.
+	hasBlobs := fn.Any(func(i input.Input) bool {
+		return i.ResolutionBlob().IsSome()
+	}, r.Inputs)
+
+	sweepAddrs := [][]byte{
+		r.DeliveryAddress.DeliveryAddress,
+	}
+
+	// If we have blobs, then we'll add an extra sweep addr for the size
+	// estimate below. WE know that these blobs will also always be based on
+	// p2tr addrs.
+	if hasBlobs {
+		sweepAddrs = append(
+			sweepAddrs, bytes.Repeat([]byte{0}, input.P2TRSize),
+		)
+	}
+
 	// Get the size of the sweep tx, which will be used to calculate the
 	// budget fee rate.
-	//
-	// TODO(roasbeef): also wants the extra change output?
 	size, err := calcSweepTxWeight(
-		r.Inputs, r.DeliveryAddress.DeliveryAddress,
+		r.Inputs, sweepAddrs,
 	)
 	if err != nil {
 		return 0, err
@@ -163,7 +181,7 @@ func (r *BumpRequest) MaxFeeRateAllowed() (chainfee.SatPerKWeight, error) {
 // calcSweepTxWeight calculates the weight of the sweep tx. It assumes a
 // sweeping tx always has a single output(change).
 func calcSweepTxWeight(inputs []input.Input,
-	outputPkScript []byte) (lntypes.WeightUnit, error) {
+	outputPkScript [][]byte) (lntypes.WeightUnit, error) {
 
 	// Use a const fee rate as we only use the weight estimator to
 	// calculate the size.
@@ -177,7 +195,7 @@ func calcSweepTxWeight(inputs []input.Input,
 	// TODO(yy): we should refactor the weight estimator to not require a
 	// fee rate and max fee rate and make it a pure tx weight calculator.
 	_, estimator, err := getWeightEstimate(
-		inputs, nil, feeRate, 0, [][]byte{outputPkScript},
+		inputs, nil, feeRate, 0, outputPkScript,
 	)
 	if err != nil {
 		return 0, err
