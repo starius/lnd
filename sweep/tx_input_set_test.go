@@ -28,7 +28,9 @@ func TestNewBudgetInputSet(t *testing.T) {
 	rt := require.New(t)
 
 	// Pass an empty slice and expect an error.
-	set, err := NewBudgetInputSet([]SweeperInput{}, testHeight)
+	set, err := NewBudgetInputSet(
+		[]SweeperInput{}, testHeight, fn.None[AuxSweeper](),
+	)
 	rt.ErrorContains(err, "inputs slice is empty")
 	rt.Nil(set)
 
@@ -66,23 +68,35 @@ func TestNewBudgetInputSet(t *testing.T) {
 	}
 
 	// Pass a slice of inputs with different deadline heights.
-	set, err = NewBudgetInputSet([]SweeperInput{input1, input2}, testHeight)
+	set, err = NewBudgetInputSet(
+		[]SweeperInput{input1, input2}, testHeight,
+		fn.None[AuxSweeper](),
+	)
 	rt.ErrorContains(err, "input deadline height not matched")
 	rt.Nil(set)
 
 	// Pass a slice of inputs that only one input has the deadline height,
 	// but it has a different value than the specified testHeight.
-	set, err = NewBudgetInputSet([]SweeperInput{input0, input2}, testHeight)
+	set, err = NewBudgetInputSet(
+		[]SweeperInput{input0, input2}, testHeight,
+		fn.None[AuxSweeper](),
+	)
 	rt.ErrorContains(err, "input deadline height not matched")
 	rt.Nil(set)
 
 	// Pass a slice of inputs that are duplicates.
-	set, err = NewBudgetInputSet([]SweeperInput{input3, input3}, testHeight)
+	set, err = NewBudgetInputSet(
+		[]SweeperInput{input3, input3}, testHeight,
+		fn.None[AuxSweeper](),
+	)
 	rt.ErrorContains(err, "duplicate inputs")
 	rt.Nil(set)
 
-	// Pass a slice of inputs that only one input has the deadline height,
-	set, err = NewBudgetInputSet([]SweeperInput{input0, input3}, testHeight)
+	// Pass a slice of inputs that only one input has the deadline height.
+	set, err = NewBudgetInputSet(
+		[]SweeperInput{input0, input3}, testHeight,
+		fn.None[AuxSweeper](),
+	)
 	rt.NoError(err)
 	rt.NotNil(set)
 }
@@ -102,7 +116,9 @@ func TestBudgetInputSetAddInput(t *testing.T) {
 	}
 
 	// Initialize an input set, which adds the above input.
-	set, err := NewBudgetInputSet([]SweeperInput{*pi}, testHeight)
+	set, err := NewBudgetInputSet(
+		[]SweeperInput{*pi}, testHeight, fn.None[AuxSweeper](),
+	)
 	require.NoError(t, err)
 
 	// Add the input to the set again.
@@ -302,7 +318,7 @@ func TestNeedWalletInput(t *testing.T) {
 			// inputs.
 			set := &BudgetInputSet{inputs: inputs}
 
-			result := set.NeedWalletInput(tc.extraBudget)
+			result := set.NeedWalletInput()
 			require.Equal(t, tc.need, result)
 		})
 	}
@@ -333,7 +349,7 @@ func TestAddWalletInputReturnErr(t *testing.T) {
 
 	// Check that the error is returned from
 	// ListUnspentWitnessFromDefaultAccount.
-	err := set.AddWalletInputs(wallet, 0)
+	err := set.AddWalletInputs(wallet)
 	require.ErrorIs(t, err, dummyErr)
 
 	// Create an utxo with unknown address type to trigger an error.
@@ -346,7 +362,7 @@ func TestAddWalletInputReturnErr(t *testing.T) {
 		min, max).Return([]*lnwallet.Utxo{utxo}, nil).Once()
 
 	// Check that the error is returned from createWalletTxInput.
-	err = set.AddWalletInputs(wallet, 0)
+	err = set.AddWalletInputs(wallet)
 	require.Error(t, err)
 
 	// Mock the wallet to return empty utxos.
@@ -354,7 +370,7 @@ func TestAddWalletInputReturnErr(t *testing.T) {
 		min, max).Return([]*lnwallet.Utxo{}, nil).Once()
 
 	// Check that the error is returned from not having wallet inputs.
-	err = set.AddWalletInputs(wallet, 0)
+	err = set.AddWalletInputs(wallet)
 	require.ErrorIs(t, err, ErrNotEnoughInputs)
 }
 
@@ -400,7 +416,7 @@ func TestAddWalletInputNotEnoughInputs(t *testing.T) {
 
 	// Add wallet inputs to the input set, which should give us an error as
 	// the wallet cannot cover the budget.
-	err := set.AddWalletInputs(wallet, 0)
+	err := set.AddWalletInputs(wallet)
 	require.ErrorIs(t, err, ErrNotEnoughInputs)
 
 	// Check that the budget set is reverted to its initial state.
@@ -456,12 +472,14 @@ func TestAddWalletInputSuccess(t *testing.T) {
 		min, max).Return([]*lnwallet.Utxo{utxo, utxo}, nil).Once()
 
 	// Initialize an input set with the pending input.
-	set, err := NewBudgetInputSet([]SweeperInput{*pi}, deadline)
+	set, err := NewBudgetInputSet(
+		[]SweeperInput{*pi}, deadline, fn.None[AuxSweeper](),
+	)
 	require.NoError(t, err)
 
 	// Add wallet inputs to the input set, which should give us an error as
 	// the wallet cannot cover the budget.
-	err = set.AddWalletInputs(wallet, 0)
+	err = set.AddWalletInputs(wallet)
 	require.NoError(t, err)
 
 	// Check that the budget set is updated.
