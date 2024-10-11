@@ -1780,7 +1780,9 @@ func TestSwitchForwardCircuitPersistence(t *testing.T) {
 
 	cdb2, err := channeldb.Open(tempPath)
 	require.NoError(t, err, "unable to reopen channeldb")
-	t.Cleanup(func() { cdb2.Close() })
+	t.Cleanup(func() {
+		require.NoError(t, cdb2.Close())
+	})
 
 	s2, err := initSwitchWithDB(testStartingHeight, cdb2)
 	require.NoError(t, err, "unable reinit switch")
