@@ -8,6 +8,7 @@ import (
 	"io"
 	mrand "math/rand"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -3178,6 +3179,60 @@ func TestSwitchGetAttemptResult(t *testing.T) {
 	case <-time.After(1 * time.Second):
 		t.Fatalf("result not received")
 	}
+}
+
+// TestSwitchGetAttemptResultStress runs series of GetAttemptResult and Stop in
+// parallel to make sure there is no race condition between these actions.
+func TestSwitchGetAttemptResultStress(t *testing.T) {
+	t.Parallel()
+
+	const paymentID = 123
+
+	s, err := initSwitchWithTempDB(t, testStartingHeight)
+	require.NoError(t, err, "unable to init switch")
+	require.NoError(t, s.Start(), "unable to start switch")
+
+	lookup := make(chan *PaymentCircuit, 1)
+	s.circuits = &mockCircuitMap{
+		lookup: lookup,
+	}
+
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		for range 1000 {
+			// Next let the lookup find the circuit in the circuit
+			// map. It should subscribe to payment results, and
+			// return the result when available.
+			lookup <- &PaymentCircuit{}
+			_, err := s.GetAttemptResult(
+				paymentID, lntypes.Hash{},
+				newMockDeobfuscator(),
+			)
+			require.NoError(t, err, "unable to get payment result")
+		}
+	}()
+
+	// Run s.Stop() in parallel with consecutive GetAttemptResult calls to
+	// make sure this doesn't result in a race condition.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		// Sleep 10ms to let several GetAttemptResult calls happen, so
+		// s.Stop() happens in the middle of GetAttemptResult series.
+		// The value 10ms was found empirically - this time is needed
+		// to expose the race condition (as a crash under -race) in the
+		// version of Switch before GoroutineManager was added.
+		time.Sleep(10 * time.Millisecond)
+
+		require.NoError(t, s.Stop())
+	}()
+
+	wg.Wait()
 }
 
 // TestInvalidFailure tests that the switch returns an unreadable failure error
