@@ -387,22 +387,20 @@ func NewPartialChainControl(cfg *Config) (*PartialChainControl, func(), error) {
 			DisableTLS:           true,
 			HTTPPostMode:         true,
 		}
-		if !cfg.Bitcoin.RegTest {
-			log.Infof("Initializing bitcoind backed fee estimator "+
-				"in %s mode", bitcoindMode.EstimateMode)
+		log.Infof("Initializing bitcoind backed fee estimator "+
+			"in %s mode", bitcoindMode.EstimateMode)
 
-			// Finally, we'll re-initialize the fee estimator, as
-			// if we're using bitcoind as a backend, then we can
-			// use live fee estimates, rather than a statically
-			// coded value.
-			fallBackFeeRate := chainfee.SatPerKVByte(25 * 1000)
-			cc.FeeEstimator, err = chainfee.NewBitcoindEstimator(
-				*rpcConfig, bitcoindMode.EstimateMode,
-				fallBackFeeRate.FeePerKWeight(),
-			)
-			if err != nil {
-				return nil, nil, err
-			}
+		// Finally, we'll re-initialize the fee estimator, as
+		// if we're using bitcoind as a backend, then we can
+		// use live fee estimates, rather than a statically
+		// coded value.
+		fallBackFeeRate := chainfee.SatPerKVByte(25 * 1000)
+		cc.FeeEstimator, err = chainfee.NewBitcoindEstimator(
+			*rpcConfig, bitcoindMode.EstimateMode,
+			fallBackFeeRate.FeePerKWeight(),
+		)
+		if err != nil {
+			return nil, nil, err
 		}
 
 		// We need to use some apis that are not exposed by btcwallet,
