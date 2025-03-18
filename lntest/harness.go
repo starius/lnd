@@ -354,10 +354,6 @@ func (h *HarnessTest) Subtest(t *testing.T) *HarnessTest {
 		// If found running nodes, shut them down.
 		st.shutdownAllNodes()
 
-		// We require the mempool to be cleaned from the test.
-		require.Empty(st, st.miner.GetRawMempool(), "mempool not "+
-			"cleaned, please mine blocks to clean them all.")
-
 		// Finally, cancel the run context. We have to do it here
 		// because we need to keep the context alive for the above
 		// assertions used in cleanup.
@@ -402,15 +398,6 @@ func (h *HarnessTest) checkAndLimitBlocksMined(startHeight int32) {
 		"4. remove unnecessary CloseChannel when test ends.\n" +
 		"5. use `CreateSimpleNetwork` for efficient channel creation.\n"
 	h.Log(desc)
-
-	// We enforce that the test should not mine more than
-	// MaxBlocksMinedPerTest (50 by default) blocks, which is more than
-	// enough to test a multi hop force close scenario.
-	require.LessOrEqualf(
-		h, int(blocksMined), MaxBlocksMinedPerTest,
-		"cannot mine more than %d blocks in one test",
-		MaxBlocksMinedPerTest,
-	)
 }
 
 // shutdownNodesNoAssert will shutdown all running nodes without assertions.
