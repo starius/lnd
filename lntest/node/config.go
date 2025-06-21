@@ -114,6 +114,9 @@ type BackendConfig interface {
 	// Credentials returns the rpc username, password and host for the
 	// backend.
 	Credentials() (string, string, string, error)
+
+	// P2PPort return bitcoin p2p port.
+	P2PPort() (int, error)
 }
 
 // BaseNodeConfig is the base node configuration.
