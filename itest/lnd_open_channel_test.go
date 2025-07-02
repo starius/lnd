@@ -3,6 +3,7 @@ package itest
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -10,6 +11,7 @@ import (
 	"github.com/lightningnetwork/lnd/funding"
 	"github.com/lightningnetwork/lnd/lncfg"
 	"github.com/lightningnetwork/lnd/lnrpc"
+	"github.com/lightningnetwork/lnd/lnrpc/chainrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
 	"github.com/lightningnetwork/lnd/lntest"
 	"github.com/lightningnetwork/lnd/lntest/node"
@@ -73,6 +75,20 @@ func testOpenChannelAfterReorg(ht *lntest.HarnessTest) {
 	}
 	pendingUpdate := ht.OpenChannelAssertPending(alice, bob, params)
 
+	fundingTxID, err := chainhash.NewHash(pendingUpdate.Txid)
+	require.NoError(ht, err, "convert funding txid into chainhash failed")
+
+	// Load the pending channel open transaction to find pkscript.
+	fundingTx := ht.AssertTxInMempool(*fundingTxID)
+	channelPkscript := fundingTx.TxOut[pendingUpdate.OutputIndex].PkScript
+
+	confClient := alice.RPC.RegisterConfirmationsNtfn(&chainrpc.ConfRequest{
+		Txid:       pendingUpdate.Txid,
+		Script:     channelPkscript,
+		NumConfs:   15,
+		HeightHint: ht.CurrentHeight(),
+	})
+
 	// Wait for miner to have seen the funding tx. The temporary miner is
 	// disconnected, and won't see the transaction.
 	ht.AssertNumTxsInMempool(1)
@@ -80,9 +96,6 @@ func testOpenChannelAfterReorg(ht *lntest.HarnessTest) {
 	// At this point, the channel's funding transaction will have been
 	// broadcast, but not confirmed, and the channel should be pending.
 	ht.AssertNodesNumPendingOpenChannels(alice, bob, 1)
-
-	fundingTxID, err := chainhash.NewHash(pendingUpdate.Txid)
-	require.NoError(ht, err, "convert funding txid into chainhash failed")
 
 	// We now cause a fork, by letting our original miner mine 10 blocks,
 	// and our new miner mine 15. This will also confirm our pending
@@ -142,6 +155,21 @@ func testOpenChannelAfterReorg(ht *lntest.HarnessTest) {
 	// Since the fundingtx was reorged out, Alice should now have no edges
 	// in her graph.
 	ht.AssertNumEdges(alice, 0, true)
+
+	// Make sure RegisterConfirmationsNtfn noticed the reorg. Give 10s to
+	// receive the notification.
+	reorgReceived := make(chan struct{})
+	go func() {
+		confMsg, err := confClient.Recv()
+		require.NoError(ht, err)
+		require.NotNil(ht, confMsg.GetReorg())
+		close(reorgReceived)
+	}()
+	select {
+	case <-time.After(10 * time.Second):
+		ht.Fatal("Failed to receive reorg notification")
+	case <-reorgReceived:
+	}
 
 	// Cleanup by mining the funding tx again, then closing the channel.
 	block = ht.MineBlocksAndAssertNumTxes(1, 1)[0]
