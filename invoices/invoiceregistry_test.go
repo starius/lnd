@@ -2132,7 +2132,7 @@ func testFailPartialMPPPaymentExternal(t *testing.T,
 	// Add an invoice which we are going to pay via a MPP set.
 	testInvoice := newInvoice(t, false, false)
 
-	ctxb := context.Background()
+	ctxb := t.Context()
 	_, err := ctx.registry.AddInvoice(
 		ctxb, testInvoice, testInvoicePaymentHash,
 	)
@@ -2243,7 +2243,7 @@ func testFailPartialAMPPayment(t *testing.T,
 	t.Parallel()
 
 	ctx := newTestContext(t, nil, makeDB)
-	ctxb := context.Background()
+	ctxb := t.Context()
 
 	const (
 		expiry    = uint32(testCurrentHeight + 20)
@@ -2449,7 +2449,7 @@ func testCancelAMPInvoicePendingHTLCs(t *testing.T,
 	t.Parallel()
 
 	ctx := newTestContext(t, nil, makeDB)
-	ctxb := context.Background()
+	ctxb := t.Context()
 
 	const (
 		expiry    = uint32(testCurrentHeight + 20)

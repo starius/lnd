@@ -5933,7 +5933,7 @@ func TestChannelLinkFail(t *testing.T) {
 				// Sign a commitment that will include
 				// signature for the HTLC just sent.
 				quitCtx, done := c.cg.Create(
-					context.Background(),
+					t.Context(),
 				)
 				defer done()
 
@@ -5982,7 +5982,7 @@ func TestChannelLinkFail(t *testing.T) {
 				// Sign a commitment that will include
 				// signature for the HTLC just sent.
 				quitCtx, done := c.cg.Create(
-					context.Background(),
+					t.Context(),
 				)
 				defer done()
 
