@@ -86,11 +86,11 @@ all: scratch check install
 # ============
 $(BTCD_BIN):
 	@$(call print, "Installing btcd.")
-	cd $(TOOLS_DIR); $(GOCC) install -trimpath $(BTCD_PKG)
+	cd $(TOOLS_DIR); CGO_ENABLED=0 $(GOCC) install -trimpath $(BTCD_PKG)
 
 $(GOIMPORTS_BIN):
 	@$(call print, "Installing goimports.")
-	cd $(TOOLS_DIR); $(GOCC) install -trimpath $(GOIMPORTS_PKG)
+	cd $(TOOLS_DIR); CGO_ENABLED=0 $(GOCC) install -trimpath $(GOIMPORTS_PKG)
 
 # ============
 # INSTALLATION
