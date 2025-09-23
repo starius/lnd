@@ -20,7 +20,7 @@ func TestSomeToOk(t *testing.T) {
 }
 
 func TestSomeToOkf(t *testing.T) {
-	errStr := "err"
+	const errStr = "err"
 	require.Equal(t, Some(1).SomeToOkf(errStr), Ok(1))
 	require.Equal(
 		t, None[uint8]().SomeToOkf(errStr),
