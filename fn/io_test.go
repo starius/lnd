@@ -2,7 +2,6 @@ package fn
 
 import (
 	"os"
-	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -33,14 +32,9 @@ func TestWriteFile(t *testing.T) {
 	ensureFileContents(t, filename, data1)
 
 	// Change file permission to read-only.
-	err = os.Chmod(filename, 0444)
+	err = makeImmutable(filename)
 	require.NoError(t, err, "couldn't change file to read-only")
-
-	// Root can bypass read-only file mode, so change the file owner.
-	if syscall.Geteuid() == 0 {
-		err = os.Chown(filename, 1000, 1000)
-		require.NoError(t, err, "couldn't chown the file")
-	}
+	defer clearImmutable(filename)
 
 	// Write must fail and keep the file.
 	err = WriteFile(filename, []byte(data2), 0644)
@@ -69,14 +63,9 @@ func TestWriteFileRemove(t *testing.T) {
 	ensureFileContents(t, filename, data1)
 
 	// Change file permission to read-only.
-	err = os.Chmod(filename, 0444)
+	err = makeImmutable(filename)
 	require.NoError(t, err, "couldn't change file to read-only")
-
-	// Root can bypass read-only file mode, so change the file owner.
-	if syscall.Geteuid() == 0 {
-		err = os.Chown(filename, 1000, 1000)
-		require.NoError(t, err, "couldn't chown the file")
-	}
+	defer clearImmutable(filename)
 
 	// Write must fail and remove the file.
 	err = WriteFileRemove(filename, []byte(data2), 0644)

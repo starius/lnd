@@ -6,6 +6,7 @@ require (
 	github.com/stretchr/testify v1.8.1
 	golang.org/x/exp v0.0.0-20231226003508-02704c960a9b
 	golang.org/x/sync v0.7.0
+	golang.org/x/sys v0.36.0
 )
 
 require (
