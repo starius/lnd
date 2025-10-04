@@ -22,6 +22,7 @@ BUILD_DATE_STAMP="202001010000.00"
 function reproducible_tar_gzip() {
   local dir=$1
   local tar_cmd=tar
+  local gzip_cmd=gzip
 
   # MacOS has a version of BSD tar which doesn't support setting the --mtime
   # flag. We need gnu-tar, or gtar for short to be installed for this script to
@@ -36,6 +37,20 @@ function reproducible_tar_gzip() {
 
     # We have gtar installed, use that instead.
     tar_cmd=gtar
+  fi
+
+  # On MacOS, the default BSD gzip produces a different output than the GNU
+  # gzip on Linux. To ensure reproducible builds, we need to use GNU gzip.
+  gzip_version=$(gzip --version 2>&1 || true)
+  if [[ ! "$gzip_version" =~ "GNU" ]]; then
+    if ! command -v "ggzip" >/dev/null 2>&1; then
+      echo "GNU gzip is required but cannot be found!"
+      echo "On MacOS please run 'brew install gzip' to install ggzip."
+      exit 1
+    fi
+
+    # We have ggzip installed, use that instead.
+    gzip_cmd=ggzip
   fi
 
   # Pin down the timestamp time zone.
