@@ -480,6 +480,7 @@ func Main() {
 		listInvoicesCommand,
 		deleteCanceledInvoiceCommand,
 		ListChannelsCommand,
+		channelReportCommand,
 		closedChannelsCommand,
 		listPaymentsCommand,
 		describeGraphCommand,
