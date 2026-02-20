@@ -1,0 +1,234 @@
+name: PR Severity Classification (Deterministic)
+
+on:
+  # Use pull_request_target to allow running on fork PRs with access to
+  # secrets. This is safe because we don't checkout or execute any code from
+  # the PR - we only read PR metadata (changed files, labels) via the GitHub
+  # API and run a deterministic classifier container.
+  pull_request_target:
+    types: [opened, synchronize, labeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-severity-det-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  PR_NUMBER: ${{ github.event.pull_request.number }}
+  PRSEVERITY_IMAGE: lightninglabs/prseverity:v0.1.0
+  # Use a distinct HTML marker so this workflow's comments don't collide with
+  # the Claude-based classifier during the transition period.
+  BOT_MARKER: "<!-- pr-severity-deterministic-bot -->"
+
+jobs:
+  classify:
+    name: Classify PR Severity (Deterministic)
+    runs-on: ubuntu-latest
+
+    # Skip if PR has skip-severity-check label.
+    # For labeled events, only run if the 'reclassify' label was added.
+    if: |
+      !contains(github.event.pull_request.labels.*.name, 'skip-severity-check') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'reclassify')
+
+    steps:
+      # ── 1. Login to Docker Hub to pull the image ──
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_API_KEY }}
+
+      # ── 2. Check for override labels ──
+      - name: Check labels
+        id: labels
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          labels=$(gh pr view "$PR_NUMBER" --json labels \
+            --jq '.labels[].name')
+
+          # Check for severity-override-* labels.
+          override=""
+          for level in critical high medium low; do
+            if echo "$labels" | grep -qx "severity-override-${level}"; then
+              override="$level"
+              break
+            fi
+          done
+          echo "override=$override" >> "$GITHUB_OUTPUT"
+
+      # ── 3. Check for existing bot comment ──
+      - name: Check for existing bot comment
+        id: bot-comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          count=$(gh pr view "$PR_NUMBER" --json comments \
+            --jq '.comments[].body' \
+            | grep -c 'pr-severity-deterministic-bot' || true)
+          echo "exists=$([ "$count" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      # ── 4. Fetch PR description and diff ──
+      - name: Fetch PR data
+        if: steps.labels.outputs.override == ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh pr view "$PR_NUMBER" --json body --jq '.body // ""' \
+            > /tmp/description.md
+
+          gh pr diff "$PR_NUMBER" > /tmp/pr.patch
+
+      # ── 5. Run prseverity container ──
+      - name: Run prseverity
+        if: steps.labels.outputs.override == ''
+        id: classify
+        run: |
+          result=$(docker run --rm \
+            -v /tmp/description.md:/data/description.md:ro \
+            -v /tmp/pr.patch:/data/pr.patch:ro \
+            "$PRSEVERITY_IMAGE" \
+            -description /data/description.md \
+            -patch /data/pr.patch)
+
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+
+          severity=$(echo "$result" | jq -r '.severity')
+          score=$(echo "$result" | jq -r '.score')
+          reasons=$(echo "$result" | jq -r '.reasons | join(", ")')
+
+          echo "severity=${severity,,}" >> "$GITHUB_OUTPUT"
+          echo "score=$score" >> "$GITHUB_OUTPUT"
+          echo "reasons=$reasons" >> "$GITHUB_OUTPUT"
+
+      # ── 6. Resolve final severity (override or classified) ──
+      - name: Resolve severity
+        id: final
+        run: |
+          if [ -n "${{ steps.labels.outputs.override }}" ]; then
+            severity="${{ steps.labels.outputs.override }}"
+            source="override"
+          else
+            severity="${{ steps.classify.outputs.severity }}"
+            source="classified"
+          fi
+
+          echo "severity=$severity" >> "$GITHUB_OUTPUT"
+          echo "source=$source" >> "$GITHUB_OUTPUT"
+
+          # Map severity to emoji.
+          case "$severity" in
+            critical) emoji="🔴" ;;
+            high)     emoji="🟠" ;;
+            medium)   emoji="🟡" ;;
+            low)      emoji="🟢" ;;
+          esac
+          echo "emoji=$emoji" >> "$GITHUB_OUTPUT"
+
+      # ── 7. Post comment ──
+      # During the transition period this workflow only posts a comment
+      # (no label changes). The existing Claude-based workflow remains
+      # the sole label manager. Compare the two comments to validate
+      # the deterministic classifier before switching over.
+      - name: Post comment
+        if: |
+          steps.bot-comment.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          SEVERITY: ${{ steps.final.outputs.severity }}
+          EMOJI: ${{ steps.final.outputs.emoji }}
+          SOURCE: ${{ steps.final.outputs.source }}
+          SCORE: ${{ steps.classify.outputs.score }}
+          REASONS: ${{ steps.classify.outputs.reasons }}
+        run: |
+          severity_upper=$(echo "$SEVERITY" | tr '[:lower:]' '[:upper:]')
+
+          # Build the comment body.
+          body=""
+
+          if [ "$SOURCE" = "override" ]; then
+            body="## ${EMOJI} PR Severity: **${severity_upper}** (deterministic)"$'\n\n'
+            body="${body}> Manual override via \`severity-override-${SEVERITY}\` label"$'\n\n'
+          else
+            body="## ${EMOJI} PR Severity: **${severity_upper}** (deterministic)"$'\n\n'
+            body="${body}> Deterministic classifier | score: ${SCORE}"$'\n\n'
+
+            if [ -n "$REASONS" ]; then
+              body="${body}**Signals:**"$'\n'
+              # Split comma-separated reasons into bullet points.
+              IFS=',' read -ra reason_arr <<< "$REASONS"
+              for reason in "${reason_arr[@]}"; do
+                reason=$(echo "$reason" | xargs)
+                body="${body}- ${reason}"$'\n'
+              done
+              body="${body}"$'\n'
+            fi
+          fi
+
+          body="${body}---"$'\n'
+          body="${body}<sub>🔬 This is the deterministic classifier running alongside the existing AI classifier for comparison. It does not modify labels.</sub>"$'\n'
+          body="${body}${BOT_MARKER}"
+
+          gh pr comment "$PR_NUMBER" --body "$body"
+
+      # On subsequent runs (synchronize), update the existing comment
+      # instead of posting a new one.
+      - name: Update existing comment
+        if: |
+          steps.bot-comment.outputs.exists == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          SEVERITY: ${{ steps.final.outputs.severity }}
+          EMOJI: ${{ steps.final.outputs.emoji }}
+          SOURCE: ${{ steps.final.outputs.source }}
+          SCORE: ${{ steps.classify.outputs.score }}
+          REASONS: ${{ steps.classify.outputs.reasons }}
+        run: |
+          severity_upper=$(echo "$SEVERITY" | tr '[:lower:]' '[:upper:]')
+
+          # Build the comment body.
+          body=""
+
+          if [ "$SOURCE" = "override" ]; then
+            body="## ${EMOJI} PR Severity: **${severity_upper}** (deterministic)"$'\n\n'
+            body="${body}> Manual override via \`severity-override-${SEVERITY}\` label"$'\n\n'
+          else
+            body="## ${EMOJI} PR Severity: **${severity_upper}** (deterministic)"$'\n\n'
+            body="${body}> Deterministic classifier | score: ${SCORE}"$'\n\n'
+
+            if [ -n "$REASONS" ]; then
+              body="${body}**Signals:**"$'\n'
+              IFS=',' read -ra reason_arr <<< "$REASONS"
+              for reason in "${reason_arr[@]}"; do
+                reason=$(echo "$reason" | xargs)
+                body="${body}- ${reason}"$'\n'
+              done
+              body="${body}"$'\n'
+            fi
+          fi
+
+          body="${body}---"$'\n'
+          body="${body}<sub>🔬 This is the deterministic classifier running alongside the existing AI classifier for comparison. It does not modify labels. Updated: $(date -u '+%Y-%m-%d %H:%M UTC')</sub>"$'\n'
+          body="${body}${BOT_MARKER}"
+
+          # Find and update the existing comment.
+          comment_id=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
+            --jq '.[] | select(.body | contains("pr-severity-deterministic-bot")) | .id' \
+            | head -1)
+
+          if [ -n "$comment_id" ]; then
+            gh api "repos/${{ github.repository }}/issues/comments/${comment_id}" \
+              -X PATCH -f body="$body"
+          else
+            # Fallback: post a new comment if we couldn't find the old one.
+            gh pr comment "$PR_NUMBER" --body "$body"
+          fi
