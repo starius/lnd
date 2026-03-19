@@ -535,7 +535,7 @@ func NewPartialChainControl(cfg *Config) (*PartialChainControl, func(), error) {
 			// Make sure the bitcoind chain backend maintains a
 			// healthy connection to the network by checking the
 			// number of outbound peers.
-			return checkOutboundPeers(chainConn)
+			return checkOutboundPeersBitcoind(chainConn)
 		}
 
 	case "btcd":
@@ -909,6 +909,42 @@ var (
 	}
 )
 
+// checkOutboundPeersBitcoind checks the number of outbound peers connected to
+// a bitcoind backend. If the number of outbound peers is below 6, a warning is
+// logged. This function is intended to ensure that the chain backend maintains
+// a healthy connection to the network.
+func checkOutboundPeersBitcoind(client *rpcclient.Client) error {
+	resp, err := client.RawRequest("getnetworkinfo", nil)
+	if err != nil {
+		return err
+	}
+
+	outboundPeers, err := parseConnectionsOut(resp)
+	if err != nil {
+		return err
+	}
+
+	logOutboundPeerCount(outboundPeers)
+
+	return nil
+}
+
+// parseConnectionsOut parses the connections_out field from a getnetworkinfo
+// response.
+func parseConnectionsOut(resp json.RawMessage) (int, error) {
+	info := struct {
+		ConnectionsOut *int `json:"connections_out"`
+	}{}
+	if err := json.Unmarshal(resp, &info); err != nil {
+		return 0, err
+	}
+	if info.ConnectionsOut == nil {
+		return 0, errors.New("connections_out is missing")
+	}
+
+	return *info.ConnectionsOut, nil
+}
+
 // checkOutboundPeers checks the number of outbound peers connected to the
 // provided RPC client. If the number of outbound peers is below 6, a warning
 // is logged. This function is intended to ensure that the chain backend
@@ -926,6 +962,14 @@ func checkOutboundPeers(client *rpcclient.Client) error {
 		}
 	}
 
+	logOutboundPeerCount(outboundPeers)
+
+	return nil
+}
+
+// logOutboundPeerCount logs a warning when the number of outbound peers is
+// below the minimum threshold.
+func logOutboundPeerCount(outboundPeers int) {
 	if outboundPeers < DefaultMinOutboundPeers {
 		log.Warnf("The chain backend has an insufficient number "+
 			"of connected outbound peers (%d connected, expected "+
@@ -933,6 +977,4 @@ func checkOutboundPeers(client *rpcclient.Client) error {
 			"Connect to more trusted nodes manually if necessary.",
 			outboundPeers, DefaultMinOutboundPeers)
 	}
-
-	return nil
 }
