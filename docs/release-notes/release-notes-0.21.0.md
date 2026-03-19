@@ -70,6 +70,11 @@
   the chain watch filter on restart. This was a pre-existing bug since
   private taproot channels were first introduced.
 
+* Chain backend outbound peer checks for bitcoind now use
+  `getnetworkinfo.connections_out` instead of `getpeerinfo`, and use a
+  context-aware single-flight RPC path to avoid piling up slow peer-check
+  requests.
+
 # New Features
 
 - [Basic Support](https://github.com/lightningnetwork/lnd/pull/9868) for onion
