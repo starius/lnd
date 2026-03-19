@@ -1,16 +1,22 @@
 package chainreg
 
 import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -98,6 +104,10 @@ type Config struct {
 	// TCP connections to Bitcoin peers in the event of a pruned block being
 	// requested.
 	Dialer chain.Dialer
+
+	// ChainBackendPeerTimeout is the timeout used when querying peer health
+	// data from the chain backend.
+	ChainBackendPeerTimeout time.Duration
 }
 
 const (
@@ -519,6 +529,13 @@ func NewPartialChainControl(cfg *Config) (*PartialChainControl, func(), error) {
 			}
 		}
 
+		peerChecker, err := newBitcoindPeerCheck(
+			rpcConfig, cfg.ChainBackendPeerTimeout,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+
 		cc.HealthCheck = func() error {
 			_, err := chainConn.RawRequest(cmd, nil)
 			if err != nil {
@@ -535,7 +552,7 @@ func NewPartialChainControl(cfg *Config) (*PartialChainControl, func(), error) {
 			// Make sure the bitcoind chain backend maintains a
 			// healthy connection to the network by checking the
 			// number of outbound peers.
-			return checkOutboundPeersBitcoind(chainConn)
+			return peerChecker.checkOutboundPeers()
 		}
 
 	case "btcd":
@@ -909,24 +926,156 @@ var (
 	}
 )
 
-// checkOutboundPeersBitcoind checks the number of outbound peers connected to
-// a bitcoind backend. If the number of outbound peers is below 6, a warning is
-// logged. This function is intended to ensure that the chain backend maintains
-// a healthy connection to the network.
-func checkOutboundPeersBitcoind(client *rpcclient.Client) error {
-	resp, err := client.RawRequest("getnetworkinfo", nil)
+// bitcoindPeerCheck provides a context-aware and single-flight outbound peer
+// count check against bitcoind.
+type bitcoindPeerCheck struct {
+	rpcURL       string
+	rpcUser      string
+	rpcPass      string
+	extraHeaders map[string]string
+	timeout      time.Duration
+	httpClient   *http.Client
+	inFlight     atomic.Bool
+}
+
+// newBitcoindPeerCheck creates a bitcoind outbound peer checker.
+func newBitcoindPeerCheck(cfg *rpcclient.ConnConfig,
+	timeout time.Duration) (*bitcoindPeerCheck, error) {
+
+	httpClient, err := newBitcoindHTTPClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	rpcURL := "https://" + cfg.Host
+	if cfg.DisableTLS {
+		rpcURL = "http://" + cfg.Host
+	}
+
+	return &bitcoindPeerCheck{
+		rpcURL:       rpcURL,
+		rpcUser:      cfg.User,
+		rpcPass:      cfg.Pass,
+		extraHeaders: cfg.ExtraHeaders,
+		timeout:      timeout,
+		httpClient:   httpClient,
+	}, nil
+}
+
+// newBitcoindHTTPClient creates an HTTP client for direct bitcoind RPC
+// requests.
+func newBitcoindHTTPClient(cfg *rpcclient.ConnConfig) (*http.Client, error) {
+	transport := &http.Transport{}
+
+	if cfg.Proxy != "" {
+		proxyURL, err := url.Parse(cfg.Proxy)
+		if err != nil {
+			return nil, err
+		}
+
+		transport.Proxy = http.ProxyURL(proxyURL)
+	}
+
+	if !cfg.DisableTLS && len(cfg.Certificates) > 0 {
+		rootCAs := x509.NewCertPool()
+		rootCAs.AppendCertsFromPEM(cfg.Certificates)
+
+		transport.TLSClientConfig = &tls.Config{
+			RootCAs: rootCAs,
+		}
+	}
+
+	return &http.Client{
+		Transport: transport,
+	}, nil
+}
+
+// checkOutboundPeers checks the outbound peer count using a context-aware HTTP
+// request and skips execution if a previous check is still in flight.
+func (b *bitcoindPeerCheck) checkOutboundPeers() error {
+	if !b.inFlight.CompareAndSwap(false, true) {
+		log.Debugf("Skipping chain backend peer check: previous call " +
+			"still in flight")
+		return nil
+	}
+	defer b.inFlight.Store(false)
+
+	ctx, cancel := context.WithTimeout(context.Background(), b.timeout)
+	defer cancel()
+
+	connectionsOut, err := b.connectionsOut(ctx)
 	if err != nil {
 		return err
 	}
 
-	outboundPeers, err := parseConnectionsOut(resp)
-	if err != nil {
-		return err
-	}
-
-	logOutboundPeerCount(outboundPeers)
+	logOutboundPeerCount(connectionsOut)
 
 	return nil
+}
+
+// connectionsOut queries bitcoind and returns getnetworkinfo.connections_out.
+func (b *bitcoindPeerCheck) connectionsOut(ctx context.Context) (int, error) {
+	request := struct {
+		JSONRPC string            `json:"jsonrpc"`
+		ID      string            `json:"id"`
+		Method  string            `json:"method"`
+		Params  []json.RawMessage `json:"params"`
+	}{
+		JSONRPC: "1.0",
+		ID:      "lnd-chainbackendpeers",
+		Method:  "getnetworkinfo",
+		Params:  []json.RawMessage{},
+	}
+
+	reqBytes, err := json.Marshal(request)
+	if err != nil {
+		return 0, err
+	}
+
+	httpReq, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, b.rpcURL, bytes.NewReader(reqBytes),
+	)
+	if err != nil {
+		return 0, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.SetBasicAuth(b.rpcUser, b.rpcPass)
+	for key, value := range b.extraHeaders {
+		httpReq.Header.Set(key, value)
+	}
+
+	httpResp, err := b.httpClient.Do(httpReq)
+	if err != nil {
+		return 0, err
+	}
+	defer httpResp.Body.Close()
+
+	respBytes, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return 0, err
+	}
+
+	if httpResp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("bitcoind returned http status %d: %s",
+			httpResp.StatusCode, string(respBytes))
+	}
+
+	response := struct {
+		Result json.RawMessage `json:"result"`
+		Error  *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}{}
+	if err := json.Unmarshal(respBytes, &response); err != nil {
+		return 0, err
+	}
+	if response.Error != nil {
+		return 0, fmt.Errorf("bitcoind rpc error %d: %v",
+			response.Error.Code, response.Error.Message)
+	}
+
+	return parseConnectionsOut(response.Result)
 }
 
 // parseConnectionsOut parses the connections_out field from a getnetworkinfo

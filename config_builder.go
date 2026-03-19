@@ -645,8 +645,9 @@ func (d *DefaultWalletImpl) BuildWalletConfig(ctx context.Context,
 				"tcp", addr, d.cfg.ConnectionTimeout,
 			)
 		},
-		BlockCache:         blockCache,
-		WalletUnlockParams: &walletInitParams,
+		BlockCache:              blockCache,
+		WalletUnlockParams:      &walletInitParams,
+		ChainBackendPeerTimeout: d.cfg.HealthChecks.ChainCheck.Timeout,
 	}
 
 	// Let's go ahead and create the partial chain control now that is only
