@@ -1,5 +1,5 @@
-//go:build kvdb_etcd
-// +build kvdb_etcd
+//go:build kvdb_etcd && dev
+// +build kvdb_etcd,dev
 
 package etcd
 

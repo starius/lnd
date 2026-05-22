@@ -1,4 +1,4 @@
-//go:build kvdb_postgres
+//go:build kvdb_postgres && dev
 
 package postgres
 

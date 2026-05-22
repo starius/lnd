@@ -1,3 +1,5 @@
+//go:build dev && !js
+
 package kvdb
 
 import (
