@@ -1,3 +1,5 @@
+//go:build dev
+
 // NOTE: forcetypeassert is skipped for the mock because the test would fail if
 // the returned value doesn't match the type.
 package lnmock
