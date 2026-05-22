@@ -7,12 +7,9 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
-	"path/filepath"
-	"testing"
 
 	sqlite_migrate "github.com/golang-migrate/migrate/v4/database/sqlite"
 	"github.com/lightningnetwork/lnd/sqldb/sqlc"
-	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite" // Register relevant drivers.
 )
 
@@ -222,56 +219,4 @@ func (s *SqliteStore) SetSchemaVersion(version int, dirty bool) error {
 	}
 
 	return driver.SetVersion(version, dirty)
-}
-
-// NewTestSqliteDB is a helper function that creates an SQLite database for
-// testing.
-func NewTestSqliteDB(t testing.TB) *SqliteStore {
-	t.Helper()
-
-	t.Logf("Creating new SQLite DB for testing")
-
-	// TODO(roasbeef): if we pass :memory: for the file name, then we get
-	// an in mem version to speed up tests
-	dbFileName := filepath.Join(t.TempDir(), "tmp.db")
-	sqlDB, err := NewSqliteStore(&SqliteConfig{
-		SkipMigrations: false,
-	}, dbFileName)
-	require.NoError(t, err)
-
-	require.NoError(t, sqlDB.ApplyAllMigrations(
-		context.Background(), GetMigrations()),
-	)
-
-	t.Cleanup(func() {
-		require.NoError(t, sqlDB.DB.Close())
-	})
-
-	return sqlDB
-}
-
-// NewTestSqliteDBWithVersion is a helper function that creates an SQLite
-// database for testing and migrates it to the given version.
-func NewTestSqliteDBWithVersion(t *testing.T, version uint) *SqliteStore {
-	t.Helper()
-
-	t.Logf("Creating new SQLite DB for testing, migrating to version %d",
-		version)
-
-	// TODO(roasbeef): if we pass :memory: for the file name, then we get
-	// an in mem version to speed up tests
-	dbFileName := filepath.Join(t.TempDir(), "tmp.db")
-	sqlDB, err := NewSqliteStore(&SqliteConfig{
-		SkipMigrations: true,
-	}, dbFileName)
-	require.NoError(t, err)
-
-	err = sqlDB.ExecuteMigrations(TargetVersion(version))
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		require.NoError(t, sqlDB.DB.Close())
-	})
-
-	return sqlDB
 }
