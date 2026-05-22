@@ -1,4 +1,4 @@
-//go:build test_db_postgres && !test_db_sqlite
+//go:build dev && test_db_postgres && !test_db_sqlite
 
 package paymentsdb
 
