@@ -212,6 +212,12 @@ replace github.com/lightningnetwork/lnd/fn/v2 => ./fn
 // TODO: remove once tlv test helper split is released.
 replace github.com/lightningnetwork/lnd/tlv => ./tlv
 
+// TODO: remove once btcd releases dev-gated mempool mocks.
+replace github.com/btcsuite/btcd => ../../btcd/cut-test-deps
+
+// TODO: remove once neutrino releases dev-gated chainimport/headerfs mocks.
+replace github.com/lightninglabs/neutrino => ../../neutrino/cut-test-deps
+
 // This replace is for https://github.com/advisories/GHSA-25xm-hr59-7c27
 replace github.com/ulikunitz/xz => github.com/ulikunitz/xz v0.5.11
 
