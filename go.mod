@@ -206,6 +206,12 @@ replace github.com/lightningnetwork/lnd/sqldb => ./sqldb
 // TODO: remove once kvdb with pgx/v5 is released.
 replace github.com/lightningnetwork/lnd/kvdb => ./kvdb
 
+// TODO: remove once fn test helper split is released.
+replace github.com/lightningnetwork/lnd/fn/v2 => ./fn
+
+// TODO: remove once tlv test helper split is released.
+replace github.com/lightningnetwork/lnd/tlv => ./tlv
+
 // This replace is for https://github.com/advisories/GHSA-25xm-hr59-7c27
 replace github.com/ulikunitz/xz => github.com/ulikunitz/xz v0.5.11
 

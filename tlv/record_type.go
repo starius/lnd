@@ -1,8 +1,6 @@
 package tlv
 
 import (
-	"testing"
-
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/lightningnetwork/lnd/fn/v2"
 	"golang.org/x/exp/constraints"
@@ -115,15 +113,6 @@ func (o *OptionalRecordT[T, V]) WhenSomeV(f func(V)) {
 	o.Option.WhenSome(func(r RecordT[T, V]) {
 		f(r.Val)
 	})
-}
-
-// UnwrapOrFailV is used to extract a value from an option within a test
-// context. If the option is None, then the test fails. This gives the
-// underlying value of the record, rather then the record itself.
-func (o *OptionalRecordT[T, V]) UnwrapOrFailV(t *testing.T) V {
-	inner := o.Option.UnwrapOrFail(t)
-
-	return inner.Val
 }
 
 // UnwrapOrErrV is used to extract a value from an option, if the option is

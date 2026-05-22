@@ -23,3 +23,6 @@ require (
 )
 
 go 1.25.5
+
+// TODO: remove once fn test helper split is released.
+replace github.com/lightningnetwork/lnd/fn/v2 => ../fn

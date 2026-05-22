@@ -2,9 +2,6 @@ package fn
 
 import (
 	"fmt"
-	"testing"
-
-	"github.com/stretchr/testify/require"
 )
 
 // Option represents a value which may or may not be there. This is very often
@@ -70,16 +67,6 @@ func (o Option[A]) UnwrapOr(a A) A {
 // thunk to be evaluated in the case when the Option is empty.
 func (o Option[A]) UnwrapOrFunc(f func() A) A {
 	return ElimOption(o, f, func(a A) A { return a })
-}
-
-// UnwrapOrFail is used to extract a value from an option within a test
-// context. If the option is None, then the test fails.
-func (o Option[A]) UnwrapOrFail(t *testing.T) A {
-	t.Helper()
-
-	require.True(t, o.isSome, "Option[%T] was None()", o.some)
-
-	return o.some
 }
 
 // UnwrapOrErr is used to extract a value from an option, if the option is

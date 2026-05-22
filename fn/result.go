@@ -2,9 +2,6 @@ package fn
 
 import (
 	"fmt"
-	"testing"
-
-	"github.com/stretchr/testify/require"
 )
 
 // Result represents a value that can either be a success (T) or an error.
@@ -116,17 +113,6 @@ func (r Result[T]) UnwrapOrElse(f func(error) T) T {
 	if r.IsErr() {
 		return f(r.right)
 	}
-
-	return r.left
-}
-
-// UnwrapOrFail returns the success value or fails the test if it's an error.
-func (r Result[T]) UnwrapOrFail(t *testing.T) T {
-	t.Helper()
-
-	require.True(
-		t, r.IsOk(), "Result[%T] contained error: %v", r.left, r.right,
-	)
 
 	return r.left
 }
